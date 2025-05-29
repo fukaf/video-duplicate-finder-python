@@ -1,0 +1,21 @@
+# Core dependencies for video processing and hashing
+numpy>=1.24.0
+opencv-python>=4.8.0
+Pillow>=10.0.0
+imagehash>=4.3.1
+
+# GUI framework (tkinter is built-in)
+# Pillow is needed for thumbnail display in tkinter
+
+# Database (sqlite3 is built-in with Python)
+
+# Video processing utilities (optional, for advanced features)
+# moviepy>=1.0.3
+
+# Development and testing
+pytest>=7.0.0
+black>=23.0.0
+flake8>=6.0.0
+
+# Progress bars for CLI
+tqdm>=4.65.0
