@@ -15,15 +15,16 @@ from .database import VideoDatabase
 class VideoScanner:
     """Main scanner class for efficient video duplicate detection"""
     
-    SUPPORTED_FORMATS = {'.mp4', '.avi', '.mkv', '.mov', '.wmv', '.flv', '.webm', '.m4v', '.3gp'}
-    
+    SUPPORTED_FORMATS = {'.mp4', '.avi', '.mkv', '.mov', '.wmv', '.flv', '.webm', '.m4v', '.3gp'}    
     def __init__(self, similarity_threshold: float = 0.8, 
                  progress_callback: Optional[Callable[[int, int], None]] = None,
-                 db_path: str = "video_duplicates.db"):
+                 db_path: str = "video_duplicates.db",
+                 num_workers: Optional[int] = None):
         self.similarity_threshold = similarity_threshold
         self.progress_callback = progress_callback
+        self.num_workers = num_workers
         self.hasher = PerceptualHasher()
-        self.comparator = EfficientComparator(similarity_threshold)
+        self.comparator = EfficientComparator(similarity_threshold, num_workers)
         self.database = VideoDatabase(db_path)
         self._stop_requested = False
         

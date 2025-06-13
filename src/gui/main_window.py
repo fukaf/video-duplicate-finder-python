@@ -141,11 +141,30 @@ class MainWindow:
         self.threshold_label = ttk.Label(settings_frame, text="0.8")
         self.threshold_label.grid(row=0, column=2)
         threshold_scale.configure(command=self.update_threshold_label)
-        
-        # Cache settings
+          # Cache settings
         self.use_cache_var = tk.BooleanVar(value=True)
         ttk.Checkbutton(settings_frame, text="Use cached hashes", 
                        variable=self.use_cache_var).grid(row=1, column=0, columnspan=2, sticky=tk.W)
+        
+        # CPU cores setting
+        ttk.Label(settings_frame, text="CPU Cores:").grid(row=2, column=0, sticky=tk.W, pady=(5,0))
+        
+        import multiprocessing
+        max_cores = multiprocessing.cpu_count()
+        self.cpu_cores_var = tk.IntVar(value=max_cores)
+        
+        cores_frame = ttk.Frame(settings_frame)
+        cores_frame.grid(row=2, column=1, sticky=(tk.W, tk.E), padx=5, pady=(5,0))
+        
+        self.cores_scale = ttk.Scale(cores_frame, from_=1, to=max_cores, 
+                                   variable=self.cpu_cores_var, orient=tk.HORIZONTAL)
+        self.cores_scale.grid(row=0, column=0, sticky=(tk.W, tk.E))
+        
+        self.cores_label = ttk.Label(cores_frame, text=f"{max_cores}")
+        self.cores_label.grid(row=0, column=1, padx=(5,0))
+        self.cores_scale.configure(command=self.update_cores_label)
+        
+        cores_frame.columnconfigure(0, weight=1)
           # Control buttons
         control_frame = ttk.Frame(left_panel)
         control_frame.grid(row=2, column=0, columnspan=2, pady=10)
@@ -368,8 +387,7 @@ class MainWindow:
             filename = filedialog.asksaveasfilename(
                 defaultextension=".log",
                 filetypes=[("Log files", "*.log"), ("Text files", "*.txt"), ("All files", "*.*")],
-                title="Save Log File"
-            )
+                title="Save Log File"            )
             
             if filename:
                 content = self.log_text.get(1.0, tk.END)
@@ -380,6 +398,7 @@ class MainWindow:
         except Exception as e:
             self.logger.error(f"Failed to save log: {e}")
             messagebox.showerror("Error", f"Failed to save log: {e}")
+    
     def browse_directory(self):
         directory = filedialog.askdirectory()
         if directory:
@@ -387,6 +406,9 @@ class MainWindow:
     
     def update_threshold_label(self, value):
         self.threshold_label.config(text=f"{float(value):.2f}")
+    
+    def update_cores_label(self, value):
+        self.cores_label.config(text=f"{int(float(value))}")
     
     def start_scan(self):
         directory = self.dir_var.get()
@@ -397,6 +419,7 @@ class MainWindow:
         self.logger.info(f"Starting scan of directory: {directory}")
         self.logger.info(f"Similarity threshold: {self.threshold_var.get()}")
         self.logger.info(f"Use cache: {self.use_cache_var.get()}")
+        self.logger.info(f"CPU cores: {int(self.cpu_cores_var.get())}")
         
         self.scan_button.config(state=tk.DISABLED)
         self.stop_button.config(state=tk.NORMAL)
@@ -420,11 +443,11 @@ class MainWindow:
             src_path = Path(__file__).parent.parent
             sys.path.insert(0, str(src_path))
             from core.scanner import VideoScanner
-            
-            # Store scanner instance so stop button can access it
+              # Store scanner instance so stop button can access it
             self.scanner = VideoScanner(
                 similarity_threshold=self.threshold_var.get(),
-                progress_callback=self.update_progress
+                progress_callback=self.update_progress,
+                num_workers=int(self.cpu_cores_var.get())
             )
             
             self.logger.info("Scanner initialized, starting directory scan...")
@@ -613,7 +636,7 @@ class MainWindow:
             sys.path.insert(0, str(src_path))
             from core.scanner import VideoScanner
             
-            scanner = VideoScanner()
+            scanner = VideoScanner(num_workers=int(self.cpu_cores_var.get()))
             thumbnail_path = scanner.get_file_thumbnail(file_path)
             
             if thumbnail_path and os.path.exists(thumbnail_path) and PIL_AVAILABLE:
@@ -659,7 +682,7 @@ class MainWindow:
             sys.path.insert(0, str(src_path))
             from core.scanner import VideoScanner
             
-            scanner = VideoScanner()
+            scanner = VideoScanner(num_workers=int(self.cpu_cores_var.get()))
             scanner.clear_cache()
             messagebox.showinfo("Cache Cleared", "All cached data has been cleared")
         except Exception as e:
@@ -693,7 +716,7 @@ class MainWindow:
             sys.path.insert(0, str(src_path))
             from core.scanner import VideoScanner
             
-            scanner = VideoScanner()
+            scanner = VideoScanner(num_workers=int(self.cpu_cores_var.get()))
             
             def progress_callback(current, total):
                 progress = (current / total) * 100 if total > 0 else 0
@@ -975,7 +998,7 @@ class MainWindow:
             sys.path.insert(0, str(src_path))
             from core.scanner import VideoScanner
             
-            scanner = VideoScanner()
+            scanner = VideoScanner(num_workers=int(self.cpu_cores_var.get()))
             duplicates = scanner.compare_existing_database()
             
             if duplicates:
@@ -1001,7 +1024,7 @@ class MainWindow:
             sys.path.insert(0, str(src_path))
             from core.scanner import VideoScanner
             
-            scanner = VideoScanner()
+            scanner = VideoScanner(num_workers=int(self.cpu_cores_var.get()))
             stats = scanner.get_database_stats()
             
             if stats:

@@ -51,6 +51,9 @@ logs/
 *.temp
 temp/
 
+# Test files
+test_*.py
+
 # Database files
 *.db
 *.sqlite
