@@ -49,8 +49,7 @@ class VideoScanner:
             
             if self._stop_requested:
                 return []
-            
-            # Step 3: Find duplicates efficiently
+              # Step 3: Find duplicates efficiently
             duplicates = self.comparator.find_duplicates_parallel(file_hashes)
             
             # Step 4: Group duplicates by similarity clusters
@@ -80,12 +79,15 @@ class VideoScanner:
         total_files = len(video_files)
         processed = 0
         
+        print(f"Processing {total_files} video files...")
+        
         for file_path in video_files:
             if self._stop_requested:
                 break
                 
-            try:
-                # Check cache first
+            print(f"Processing file {processed + 1}/{total_files}: {Path(file_path).name}")
+                
+            try:                # Check cache first
                 cached_hash = None
                 if use_cache:
                     cached_hash = self.database.get_file_hash(file_path)
@@ -95,6 +97,8 @@ class VideoScanner:
                 else:
                     # Compute new hash
                     file_hash = self.hasher.compute_video_hash(file_path)
+                    if self._stop_requested:
+                        break
                     if file_hash:
                         file_hashes[file_path] = file_hash
                         
@@ -114,16 +118,58 @@ class VideoScanner:
         return file_hashes
     
     def _get_file_info(self, file_path: str) -> Dict:
-        """Get file metadata"""
+        """Get comprehensive file metadata including video properties"""
         try:
+            import cv2
+            
+            # Basic file info
+            stat = os.stat(file_path)
+            file_info = {
+                'size': stat.st_size,
+                'modified': datetime.fromtimestamp(stat.st_mtime).isoformat(),
+                'created': datetime.fromtimestamp(stat.st_ctime).isoformat()
+            }
+            
+            # Get video properties using OpenCV
+            cap = cv2.VideoCapture(file_path)
+            if cap.isOpened():
+                # Resolution
+                width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+                height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+                
+                # Duration and frame info
+                fps = cap.get(cv2.CAP_PROP_FPS)
+                frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+                duration = frame_count / fps if fps > 0 else 0
+                
+                # Bitrate (approximate)
+                bitrate = (stat.st_size * 8) / duration if duration > 0 else 0
+                
+                # Add video properties
+                file_info.update({
+                    'width': width,
+                    'height': height,
+                    'fps': fps,
+                    'frame_count': frame_count,
+                    'duration': duration,
+                    'bitrate': bitrate,
+                    'resolution': f"{width}x{height}",
+                    'aspect_ratio': width / height if height > 0 else 0,
+                    'pixel_count': width * height
+                })
+                
+                cap.release()
+            
+            return file_info
+            
+        except Exception as e:
+            print(f"Error getting file info for {file_path}: {e}")
             stat = os.stat(file_path)
             return {
                 'size': stat.st_size,
                 'modified': datetime.fromtimestamp(stat.st_mtime).isoformat(),
                 'created': datetime.fromtimestamp(stat.st_ctime).isoformat()
             }
-        except:
-            return {}
     
     def _group_duplicates(self, duplicates: List[Tuple[str, str, float]]) -> List[Tuple[str, str, float]]:
         """Group duplicate pairs into clusters"""
