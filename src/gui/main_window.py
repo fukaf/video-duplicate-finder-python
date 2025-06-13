@@ -85,13 +85,15 @@ class MainWindow:
         
         ttk.Button(control_frame, text="Generate Thumbnails", 
                   command=self.generate_thumbnails).grid(row=0, column=3, padx=5)
-        
-        # Second row of buttons for database operations
+          # Second row of buttons for database operations
         ttk.Button(control_frame, text="Compare Database", 
                   command=self.compare_database).grid(row=1, column=0, padx=5, pady=5)
         
         ttk.Button(control_frame, text="Database Stats", 
                   command=self.show_database_stats).grid(row=1, column=1, padx=5, pady=5)
+                  
+        ttk.Button(control_frame, text="Clean Database", 
+                  command=self.clean_database).grid(row=1, column=2, padx=5, pady=5)
         
         # Status and progress
         status_frame = ttk.Frame(left_panel)
@@ -554,6 +556,18 @@ class MainWindow:
                 try:
                     os.remove(file_path)
                     self.results_tree.delete(item)
+                    
+                    # Remove from database as well
+                    try:
+                        src_path = Path(__file__).parent.parent
+                        sys.path.insert(0, str(src_path))
+                        from core.database import VideoDatabase
+                        
+                        db = VideoDatabase()
+                        db._remove_file(file_path)
+                    except Exception as db_e:
+                        print(f"Warning: Failed to remove file from database: {db_e}")
+                    
                     messagebox.showinfo("Deleted", "File deleted successfully")
                 except Exception as e:
                     messagebox.showerror("Error", f"Failed to delete file: {e}")
@@ -692,8 +706,7 @@ class MainWindow:
             if not files_to_delete:
                 messagebox.showinfo("No Action", "No files recommended for deletion")
                 return
-            
-            # Confirm deletion
+              # Confirm deletion
             file_list = "\n".join([f"• {Path(f).name}" for f in files_to_delete])
             result = messagebox.askyesno("Confirm Auto-Delete", 
                                        f"Delete {len(files_to_delete)} lower quality files?\n\n"
@@ -702,10 +715,13 @@ class MainWindow:
             
             if result:
                 deleted_count = 0
+                deleted_files = []
+                
                 for file_path in files_to_delete:
                     try:
                         os.remove(file_path)
                         deleted_count += 1
+                        deleted_files.append(file_path)
                         
                         # Remove from tree view
                         for child in self.results_tree.get_children(group_item):
@@ -716,6 +732,15 @@ class MainWindow:
                                 
                     except Exception as e:
                         print(f"Error deleting {file_path}: {e}")
+                
+                # Remove deleted files from database
+                try:
+                    from core.database import VideoDatabase
+                    db = VideoDatabase()
+                    for file_path in deleted_files:
+                        db._remove_file(file_path)
+                except Exception as db_e:
+                    print(f"Warning: Failed to remove some files from database: {db_e}")
                 
                 messagebox.showinfo("Deletion Complete", 
                                   f"Successfully deleted {deleted_count} files\n"
@@ -811,4 +836,52 @@ Ready for comparison: {stats['files_with_hashes']} files"""
         except Exception as e:
             messagebox.showerror("Error", f"Failed to get database stats: {e}")
 
-    # ...existing code...
+    def clean_database(self):
+        """Clean database by removing entries for non-existent files"""
+        try:
+            src_path = Path(__file__).parent.parent
+            sys.path.insert(0, str(src_path))
+            from core.database import VideoDatabase
+            
+            # Show current stats before cleanup
+            db = VideoDatabase()
+            
+            # Get stats before cleanup
+            before_files = db.get_all_files()
+            before_count = len(before_files)
+            missing_files = [f for f in before_files if not os.path.exists(f['file_path'])]
+            missing_count = len(missing_files)
+            
+            if missing_count == 0:
+                messagebox.showinfo("Clean Database", "Database is already clean! No missing files found.")
+                return
+            
+            # Confirm cleanup
+            result = messagebox.askyesno("Confirm Database Cleanup", 
+                                       f"Found {missing_count} missing files out of {before_count} total files.\n\n"
+                                       f"This will remove database entries for files that no longer exist on disk.\n\n"
+                                       f"Continue with cleanup?")
+            
+            if result:
+                self.status_label.config(text="Cleaning database...")
+                self.root.update()
+                
+                # Perform cleanup
+                db.cleanup_missing_files()
+                
+                # Get stats after cleanup
+                after_files = db.get_all_files()
+                after_count = len(after_files)
+                cleaned_count = before_count - after_count
+                
+                self.status_label.config(text="Database cleanup complete")
+                
+                messagebox.showinfo("Database Cleanup Complete", 
+                                  f"Database cleanup completed successfully!\n\n"
+                                  f"Removed {cleaned_count} entries for missing files\n"
+                                  f"Database now contains {after_count} files")
+                
+        except Exception as e:
+            error_msg = f"Failed to clean database: {e}"
+            self.status_label.config(text="Database cleanup failed")
+            messagebox.showerror("Error", error_msg)
