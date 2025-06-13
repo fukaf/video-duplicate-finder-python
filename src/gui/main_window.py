@@ -1,12 +1,14 @@
 # src/gui/main_window.py
 import tkinter as tk
-from tkinter import ttk, filedialog, messagebox
+from tkinter import ttk, filedialog, messagebox, scrolledtext
 from pathlib import Path
 import threading
 from typing import List
 import os
 import sys
 from datetime import datetime
+import logging
+from queue import Queue
 
 try:
     from PIL import Image, ImageTk
@@ -14,23 +16,96 @@ try:
 except ImportError:
     PIL_AVAILABLE = False
 
+class TextHandler(logging.Handler):
+    """Custom logging handler that writes to a tkinter Text widget"""
+    def __init__(self, text_widget):
+        super().__init__()
+        self.text_widget = text_widget
+        
+    def emit(self, record):
+        msg = self.format(record)
+        # Schedule the text update in the main thread
+        self.text_widget.after(0, self._append_text, msg)
+    
+    def _append_text(self, msg):
+        try:
+            self.text_widget.configure(state='normal')
+            self.text_widget.insert(tk.END, msg + '\n')
+            self.text_widget.configure(state='disabled')
+            # Auto-scroll to bottom
+            self.text_widget.see(tk.END)
+        except tk.TclError:
+            # Widget might be destroyed
+            pass
+        
 class MainWindow:
     def __init__(self):
         self.root = tk.Tk()
         self.root.title("Video Duplicate Finder - Python")
         self.root.geometry("1200x800")
         
+        self.setup_logging()
         self.setup_ui()
         self.scanner = None
         self.duplicate_groups = []
-    
+    def setup_logging(self):
+        """Setup logging configuration"""
+        # Create logger
+        self.logger = logging.getLogger('VideoFinder')
+        self.logger.setLevel(logging.DEBUG)
+        
+        # Clear any existing handlers
+        self.logger.handlers.clear()
+        
+        # Create formatter
+        formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s', 
+                                    datefmt='%H:%M:%S')
+        
+        # We'll add the text handler after creating the text widget
+        self.log_formatter = formatter    
     def run(self):
         """Start the application"""
         self.root.mainloop()
-        
+
     def setup_ui(self):
+        # Create main container with notebook for tabs
+        main_container = ttk.Frame(self.root, padding="5")
+        main_container.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
+        
+        # Create notebook for tabbed interface
+        notebook = ttk.Notebook(main_container)
+        notebook.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
+        
+        # Main tab for scanning and results
+        main_tab = ttk.Frame(notebook)
+        notebook.add(main_tab, text="Scanner")
+        
+        # Log tab for debug output
+        log_tab = ttk.Frame(notebook)
+        notebook.add(log_tab, text="Log")
+        
+        # Setup main tab content
+        self.setup_main_tab(main_tab)
+        
+        # Setup log tab content
+        self.setup_log_tab(log_tab)
+        
+        # Configure grid weights
+        main_container.columnconfigure(0, weight=1)
+        main_container.rowconfigure(0, weight=1)
+        self.root.columnconfigure(0, weight=1)
+        self.root.rowconfigure(0, weight=1)
+        
+        # Now setup the text logging handler
+        self.setup_text_logging()
+        
+        # Log startup message
+        self.logger.info("Video Duplicate Finder started")
+        
+    def setup_main_tab(self, parent):
+        """Setup the main scanner tab"""
         # Main frame with horizontal split
-        main_frame = ttk.Frame(self.root, padding="10")
+        main_frame = ttk.Frame(parent, padding="5")
         main_frame.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
         
         # Left panel for controls and results tree
@@ -109,7 +184,8 @@ class MainWindow:
         # Results tree
         results_frame = ttk.LabelFrame(left_panel, text="Duplicate Groups", padding="5")
         results_frame.grid(row=4, column=0, columnspan=2, sticky=(tk.W, tk.E, tk.N, tk.S), pady=5)
-          # Configure grid weights
+        
+        # Configure grid weights
         left_panel.columnconfigure(1, weight=1)
         left_panel.rowconfigure(4, weight=1)
         main_frame.columnconfigure(0, weight=2)
@@ -208,6 +284,102 @@ class MainWindow:
         
         parent.columnconfigure(0, weight=1)
     
+    def setup_log_tab(self, parent):
+        """Setup the log tab with scrollable text widget"""
+        log_frame = ttk.Frame(parent, padding="5")
+        log_frame.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
+        
+        # Log control frame
+        control_frame = ttk.Frame(log_frame)
+        control_frame.grid(row=0, column=0, sticky=(tk.W, tk.E), pady=(0, 5))
+        
+        ttk.Label(control_frame, text="Log Level:").grid(row=0, column=0, padx=(0, 5))
+        
+        self.log_level_var = tk.StringVar(value="INFO")
+        log_level_combo = ttk.Combobox(control_frame, textvariable=self.log_level_var, 
+                                     values=["DEBUG", "INFO", "WARNING", "ERROR"], 
+                                     width=10, state="readonly")
+        log_level_combo.grid(row=0, column=1, padx=5)
+        log_level_combo.bind("<<ComboboxSelected>>", self.change_log_level)
+        
+        ttk.Button(control_frame, text="Clear Log", command=self.clear_log).grid(row=0, column=2, padx=5)
+        ttk.Button(control_frame, text="Save Log", command=self.save_log).grid(row=0, column=3, padx=5)
+        
+        # Log text widget with scrollbar
+        text_frame = ttk.Frame(log_frame)
+        text_frame.grid(row=1, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
+        
+        self.log_text = tk.Text(text_frame, wrap=tk.WORD, state='disabled',
+                               font=('Consolas', 9), bg='#f8f8f8', fg='#333333')
+        self.log_text.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
+        
+        log_scrollbar = ttk.Scrollbar(text_frame, orient=tk.VERTICAL, command=self.log_text.yview)
+        log_scrollbar.grid(row=0, column=1, sticky=(tk.N, tk.S))
+        self.log_text.configure(yscrollcommand=log_scrollbar.set)
+        
+        # Configure text tags for different log levels
+        self.log_text.tag_configure("DEBUG", foreground="#666666")
+        self.log_text.tag_configure("INFO", foreground="#000000")
+        self.log_text.tag_configure("WARNING", foreground="#ff8c00")
+        self.log_text.tag_configure("ERROR", foreground="#dc143c")
+        self.log_text.tag_configure("CRITICAL", foreground="#8b0000", font=('Consolas', 9, 'bold'))
+        
+        # Configure grid weights
+        log_frame.columnconfigure(0, weight=1)
+        log_frame.rowconfigure(1, weight=1)
+        text_frame.columnconfigure(0, weight=1)
+        text_frame.rowconfigure(0, weight=1)
+        parent.columnconfigure(0, weight=1)
+        parent.rowconfigure(0, weight=1)
+    
+    def setup_text_logging(self):
+        """Setup the text widget logging handler"""
+        # Create and configure the text handler
+        self.text_handler = TextHandler(self.log_text)
+        self.text_handler.setFormatter(self.log_formatter)
+        self.text_handler.setLevel(logging.INFO)
+        
+        # Add to logger
+        self.logger.addHandler(self.text_handler)
+        
+        # Also add console handler for backup
+        console_handler = logging.StreamHandler()
+        console_handler.setFormatter(self.log_formatter)
+        console_handler.setLevel(logging.WARNING)  # Only warnings and errors to console
+        self.logger.addHandler(console_handler)
+    
+    def change_log_level(self, event=None):
+        """Change the logging level"""
+        level_name = self.log_level_var.get()
+        level = getattr(logging, level_name)
+        self.text_handler.setLevel(level)
+        self.logger.info(f"Log level changed to {level_name}")
+    
+    def clear_log(self):
+        """Clear the log text widget"""
+        self.log_text.configure(state='normal')
+        self.log_text.delete(1.0, tk.END)
+        self.log_text.configure(state='disabled')
+        self.logger.info("Log cleared")
+    
+    def save_log(self):
+        """Save log content to file"""
+        try:
+            filename = filedialog.asksaveasfilename(
+                defaultextension=".log",
+                filetypes=[("Log files", "*.log"), ("Text files", "*.txt"), ("All files", "*.*")],
+                title="Save Log File"
+            )
+            
+            if filename:
+                content = self.log_text.get(1.0, tk.END)
+                with open(filename, 'w', encoding='utf-8') as f:
+                    f.write(content)
+                self.logger.info(f"Log saved to {filename}")
+                messagebox.showinfo("Log Saved", f"Log saved successfully to:\n{filename}")
+        except Exception as e:
+            self.logger.error(f"Failed to save log: {e}")
+            messagebox.showerror("Error", f"Failed to save log: {e}")
     def browse_directory(self):
         directory = filedialog.askdirectory()
         if directory:
@@ -221,6 +393,10 @@ class MainWindow:
         if not directory or not Path(directory).exists():
             messagebox.showerror("Error", "Please select a valid directory")
             return
+        
+        self.logger.info(f"Starting scan of directory: {directory}")
+        self.logger.info(f"Similarity threshold: {self.threshold_var.get()}")
+        self.logger.info(f"Use cache: {self.use_cache_var.get()}")
         
         self.scan_button.config(state=tk.DISABLED)
         self.stop_button.config(state=tk.NORMAL)
@@ -239,6 +415,7 @@ class MainWindow:
     def _scan_directory(self, directory):
         """Run scan in background thread"""
         try:
+            self.logger.debug("Initializing scanner...")
             # Add src path for imports
             src_path = Path(__file__).parent.parent
             sys.path.insert(0, str(src_path))
@@ -250,14 +427,20 @@ class MainWindow:
                 progress_callback=self.update_progress
             )
             
+            self.logger.info("Scanner initialized, starting directory scan...")
             duplicates = self.scanner.scan_directory(directory, use_cache=self.use_cache_var.get())
+            
+            self.logger.info(f"Scan completed. Found {len(duplicates)} duplicate pairs")
             
             # Group duplicates
             self.duplicate_groups = self._group_duplicates_by_cluster(duplicates)
-              # Update UI in main thread
+            self.logger.info(f"Grouped into {len(self.duplicate_groups)} duplicate groups")
+
+            # Update UI in main thread
             self.root.after(0, self.display_results, self.duplicate_groups)
         except Exception as e:
             error_msg = f"Scan failed: {e}"
+            self.logger.error(error_msg)
             self.root.after(0, lambda msg=error_msg: messagebox.showerror("Error", msg))
         finally:
             self.root.after(0, self.scan_complete)
@@ -267,9 +450,9 @@ class MainWindow:
         if not duplicates:
             return []
         
-        print(f"DEBUG: Processing {len(duplicates)} duplicate pairs:")
+        self.logger.debug(f"Processing {len(duplicates)} duplicate pairs:")
         for i, (file1, file2, similarity) in enumerate(duplicates):
-            print(f"  Pair {i+1}: {Path(file1).name} <-> {Path(file2).name} (similarity: {similarity:.3f})")
+            self.logger.debug(f"  Pair {i+1}: {Path(file1).name} <-> {Path(file2).name} (similarity: {similarity:.3f})")
         
         # Simple clustering: group files that appear in multiple pairs
         file_groups = {}
@@ -293,11 +476,13 @@ class MainWindow:
             elif group2 is not None:
                 # file2 in group, add file1
                 file_groups[file1] = group2
-            else:                # Neither file in a group, create new group
+            else:
+                # Neither file in a group, create new group
                 file_groups[file1] = group_id
                 file_groups[file2] = group_id
                 group_id += 1
-          # Convert to list of groups
+
+        # Convert to list of groups
         groups = {}
         for file_path, gid in file_groups.items():
             if gid not in groups:
@@ -305,7 +490,9 @@ class MainWindow:
             groups[gid].append(file_path)
         
         # Only return groups with 2 or more files
-        return [group for group in groups.values() if len(group) >= 2]
+        result_groups = [group for group in groups.values() if len(group) >= 2]
+        self.logger.debug(f"Created {len(result_groups)} groups from clustering")
+        return result_groups
     
     def update_progress(self, current, total):
         """Update progress bar - called from background thread"""
