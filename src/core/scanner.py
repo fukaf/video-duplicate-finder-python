@@ -218,3 +218,85 @@ class VideoScanner:
                     
             except Exception as e:
                 print(f"Error generating thumbnail for {file_path}: {e}")
+                
+    def compare_existing_database(self) -> List[Tuple[str, str, float]]:
+        """
+        Compare hash values of existing files in database to find duplicates
+        Returns:
+            List of duplicate pairs with similarity scores from existing database entries
+        """
+        try:
+            print("Comparing existing database entries...")
+            
+            # Get all files from database
+            all_files = self.database.get_all_files()
+            
+            if len(all_files) < 2:
+                print(f"Need at least 2 files in database to compare. Found {len(all_files)} files.")
+                return []
+            
+            print(f"Found {len(all_files)} files in database")
+            
+            # Extract file paths and hashes
+            file_hashes = {}
+            valid_files = []
+            
+            for file_data in all_files:
+                file_path = file_data['file_path']
+                file_hash = file_data['file_hash']
+                
+                # Check if file still exists and hash is valid
+                if file_hash and os.path.exists(file_path):
+                    file_hashes[file_path] = file_hash
+                    valid_files.append(file_path)
+                else:
+                    print(f"Skipping {file_path}: File missing or no hash")
+            
+            if len(file_hashes) < 2:
+                print(f"Need at least 2 valid files to compare. Found {len(file_hashes)} valid files.")
+                return []
+            
+            print(f"Comparing {len(file_hashes)} valid files...")
+            
+            # Use existing comparator to find duplicates
+            duplicates = self.comparator.find_duplicates_parallel(file_hashes)
+            
+            print(f"Found {len(duplicates)} duplicate pairs")
+            return duplicates
+            
+        except Exception as e:
+            print(f"Error comparing existing database: {e}")
+            return []
+
+    def get_database_stats(self) -> Dict:
+        """
+        Get statistics about the current database
+        Returns:
+            Dictionary with database statistics
+        """
+        try:
+            all_files = self.database.get_all_files()
+            
+            total_files = len(all_files)
+            files_with_hashes = sum(1 for f in all_files if f['file_hash'])
+            existing_files = sum(1 for f in all_files if os.path.exists(f['file_path']))
+            
+            total_size = 0
+            for file_data in all_files:
+                if os.path.exists(file_data['file_path']):
+                    try:
+                        total_size += os.path.getsize(file_data['file_path'])
+                    except:
+                        pass
+            
+            return {
+                'total_files': total_files,
+                'files_with_hashes': files_with_hashes,
+                'existing_files': existing_files,
+                'missing_files': total_files - existing_files,
+                'total_size_mb': total_size / (1024 * 1024),
+                'database_path': self.database.db_path
+            }
+        except Exception as e:
+            print(f"Error getting database stats: {e}")
+            return {}

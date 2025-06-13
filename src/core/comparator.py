@@ -104,3 +104,58 @@ class EfficientComparator:
                     print(f"Error in parallel comparison: {e}")
         
         return duplicates
+    
+    def find_duplicates_comprehensive(self, file_hashes: Dict[str, str]) -> List[Tuple[str, str, float]]:
+        """
+        Comprehensive duplicate detection that ensures all similar videos are found
+        Uses bucketing first, then falls back to full comparison for remaining files
+        """
+        if len(file_hashes) < 2:
+            return []
+        
+        # First, try efficient bucketing
+        duplicates = self.find_duplicates(file_hashes)
+        
+        # Track which files have been matched
+        matched_files = set()
+        for file1, file2, _ in duplicates:
+            matched_files.add(file1)
+            matched_files.add(file2)
+        
+        # For unmatched files, do a more thorough comparison
+        unmatched_files = [f for f in file_hashes.keys() if f not in matched_files]
+        
+        if len(unmatched_files) > 1:
+            # Compare unmatched files against all files
+            additional_duplicates = self._compare_all_pairs(unmatched_files + list(matched_files), file_hashes)
+            duplicates.extend(additional_duplicates)
+        
+        # Remove duplicate pairs (same pair reported twice)
+        seen_pairs = set()
+        unique_duplicates = []
+        for file1, file2, similarity in duplicates:
+            pair = tuple(sorted([file1, file2]))
+            if pair not in seen_pairs:
+                seen_pairs.add(pair)
+                unique_duplicates.append((file1, file2, similarity))
+        
+        return unique_duplicates
+    
+    def _compare_all_pairs(self, files: List[str], file_hashes: Dict[str, str]) -> List[Tuple[str, str, float]]:
+        """Compare all pairs of files - used as fallback for comprehensive detection"""
+        from .hasher import PerceptualHasher
+        
+        duplicates = []
+        hasher = PerceptualHasher()
+        
+        for i in range(len(files)):
+            for j in range(i + 1, len(files)):
+                file1, file2 = files[i], files[j]
+                hash1, hash2 = file_hashes.get(file1), file_hashes.get(file2)
+                
+                if hash1 and hash2:
+                    similarity = hasher.compute_similarity(hash1, hash2)
+                    if similarity >= self.similarity_threshold:
+                        duplicates.append((file1, file2, similarity))
+        
+        return duplicates

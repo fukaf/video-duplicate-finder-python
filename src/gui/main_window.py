@@ -71,8 +71,7 @@ class MainWindow:
         self.use_cache_var = tk.BooleanVar(value=True)
         ttk.Checkbutton(settings_frame, text="Use cached hashes", 
                        variable=self.use_cache_var).grid(row=1, column=0, columnspan=2, sticky=tk.W)
-        
-        # Control buttons
+          # Control buttons
         control_frame = ttk.Frame(left_panel)
         control_frame.grid(row=2, column=0, columnspan=2, pady=10)
         
@@ -86,6 +85,13 @@ class MainWindow:
         
         ttk.Button(control_frame, text="Generate Thumbnails", 
                   command=self.generate_thumbnails).grid(row=0, column=3, padx=5)
+        
+        # Second row of buttons for database operations
+        ttk.Button(control_frame, text="Compare Database", 
+                  command=self.compare_database).grid(row=1, column=0, padx=5, pady=5)
+        
+        ttk.Button(control_frame, text="Database Stats", 
+                  command=self.show_database_stats).grid(row=1, column=1, padx=5, pady=5)
         
         # Status and progress
         status_frame = ttk.Frame(left_panel)
@@ -223,7 +229,8 @@ class MainWindow:
         for item in self.results_tree.get_children():
             self.results_tree.delete(item)
         self.duplicate_groups = []
-          # Start scanning in separate thread
+        
+        # Start scanning in separate thread
         self.scan_thread = threading.Thread(target=self._scan_directory, args=(directory,))
         self.scan_thread.start()
     
@@ -245,10 +252,8 @@ class MainWindow:
             
             # Group duplicates
             self.duplicate_groups = self._group_duplicates_by_cluster(duplicates)
-            
-            # Update UI in main thread
+              # Update UI in main thread
             self.root.after(0, self.display_results, self.duplicate_groups)
-            
         except Exception as e:
             error_msg = f"Scan failed: {e}"
             self.root.after(0, lambda msg=error_msg: messagebox.showerror("Error", msg))
@@ -259,6 +264,10 @@ class MainWindow:
         """Group duplicate pairs into clusters of similar videos"""
         if not duplicates:
             return []
+        
+        print(f"DEBUG: Processing {len(duplicates)} duplicate pairs:")
+        for i, (file1, file2, similarity) in enumerate(duplicates):
+            print(f"  Pair {i+1}: {Path(file1).name} <-> {Path(file2).name} (similarity: {similarity:.3f})")
         
         # Simple clustering: group files that appear in multiple pairs
         file_groups = {}
@@ -282,8 +291,7 @@ class MainWindow:
             elif group2 is not None:
                 # file2 in group, add file1
                 file_groups[file1] = group2
-            else:
-                # Neither file in a group, create new group
+            else:                # Neither file in a group, create new group
                 file_groups[file1] = group_id
                 file_groups[file2] = group_id
                 group_id += 1
@@ -294,7 +302,8 @@ class MainWindow:
                 groups[gid] = []
             groups[gid].append(file_path)
         
-        return list(groups.values())
+        # Only return groups with 2 or more files
+        return [group for group in groups.values() if len(group) >= 2]
     
     def update_progress(self, current, total):
         """Update progress bar - called from background thread"""
@@ -342,7 +351,8 @@ class MainWindow:
                 else:
                     recommendation = "DELETE (Lower Quality)"
                     tag_color = "delete"
-                    item_id = self.results_tree.insert(group_id, "end", 
+                
+                item_id = self.results_tree.insert(group_id, "end", 
                                                  text=Path(file_path).name,
                                                  values=(quality_score, resolution, size_str, duration, recommendation),
                                                  tags=(file_path, tag_color))
@@ -723,5 +733,82 @@ class MainWindow:
                 
         except Exception as e:
             messagebox.showerror("Error", f"Failed to auto-delete files: {e}")
+
+    def compare_database(self):
+        """Compare existing files in database for duplicates"""
+        try:
+            src_path = Path(__file__).parent.parent
+            sys.path.insert(0, str(src_path))
+            from core.scanner import VideoScanner
+            
+            self.status_label.config(text="Comparing database entries...")
+            self.progress_var.set(0)
+            
+            # Clear previous results
+            for item in self.results_tree.get_children():
+                self.results_tree.delete(item)
+            self.duplicate_groups = []
+            
+            # Run comparison in background thread
+            thread = threading.Thread(target=self._compare_database_background)
+            thread.start()
+            
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to start database comparison: {e}")
+    
+    def _compare_database_background(self):
+        """Run database comparison in background thread"""
+        try:
+            src_path = Path(__file__).parent.parent
+            sys.path.insert(0, str(src_path))
+            from core.scanner import VideoScanner
+            
+            scanner = VideoScanner()
+            duplicates = scanner.compare_existing_database()
+            
+            if duplicates:
+                # Group duplicates
+                self.duplicate_groups = self._group_duplicates_by_cluster(duplicates)
+                
+                # Update UI in main thread
+                self.root.after(0, self.display_results, self.duplicate_groups)
+                self.root.after(0, lambda: self.status_label.config(text=f"Database comparison complete - Found {len(self.duplicate_groups)} duplicate groups"))
+            else:
+                self.root.after(0, lambda: self.status_label.config(text="No duplicates found in database"))
+                self.root.after(0, lambda: messagebox.showinfo("Database Comparison", "No duplicate files found in the existing database"))
+                
+        except Exception as e:
+            error_msg = f"Database comparison failed: {e}"
+            self.root.after(0, lambda msg=error_msg: messagebox.showerror("Error", msg))
+            self.root.after(0, lambda: self.status_label.config(text="Database comparison failed"))
+    
+    def show_database_stats(self):
+        """Show statistics about the current database"""
+        try:
+            src_path = Path(__file__).parent.parent
+            sys.path.insert(0, str(src_path))
+            from core.scanner import VideoScanner
+            
+            scanner = VideoScanner()
+            stats = scanner.get_database_stats()
+            
+            if stats:
+                stats_text = f"""Database Statistics:
+
+Total Files: {stats['total_files']}
+Files with Hashes: {stats['files_with_hashes']}
+Existing Files: {stats['existing_files']}
+Missing Files: {stats['missing_files']}
+Total Size: {stats['total_size_mb']:.1f} MB
+Database Path: {stats['database_path']}
+
+Ready for comparison: {stats['files_with_hashes']} files"""
+                
+                messagebox.showinfo("Database Statistics", stats_text)
+            else:
+                messagebox.showwarning("Database Stats", "Could not retrieve database statistics")
+                
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to get database stats: {e}")
 
     # ...existing code...
