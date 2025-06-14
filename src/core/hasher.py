@@ -6,6 +6,11 @@ from typing import List, Tuple, Optional, Dict
 import hashlib
 import struct
 
+# Fix for Pillow 10.0+ compatibility with older imagehash versions
+# If ANTIALIAS doesn't exist, create it as an alias to LANCZOS
+if not hasattr(Image, 'ANTIALIAS'):
+    Image.ANTIALIAS = Image.Resampling.LANCZOS
+
 class PerceptualHasher:
     """Advanced perceptual hashing for video duplicate detection"""
     

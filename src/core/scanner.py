@@ -10,29 +10,44 @@ import threading
 import logging
 
 from .hasher import PerceptualHasher
+from .unified_hasher import UnifiedHasher
 from .comparator import EfficientComparator
 from .database import VideoDatabase
 
 class VideoScanner:
     """Main scanner class for efficient video duplicate detection"""
     
-    SUPPORTED_FORMATS = {'.mp4', '.avi', '.mkv', '.mov', '.wmv', '.flv', '.webm', '.m4v', '.3gp'}    
+    SUPPORTED_FORMATS = {'.mp4', '.avi', '.mkv', '.mov', '.wmv', '.flv', '.webm', '.m4v', '.3gp'}
+    
     def __init__(self, similarity_threshold: float = 0.8, 
                  progress_callback: Optional[Callable[[int, int], None]] = None,
                  db_path: str = "video_duplicates.db",
                  num_workers: Optional[int] = None,
-                 logger: Optional[logging.Logger] = None):
+                 logger: Optional[logging.Logger] = None,
+                 hash_method: str = "original"):
         self.similarity_threshold = similarity_threshold
         self.progress_callback = progress_callback
         self.num_workers = num_workers
         self.logger = logger or logging.getLogger(__name__)
-        self.hasher = PerceptualHasher()
+        self.hash_method = hash_method
+        
+        # Use unified hasher instead of direct PerceptualHasher
+        try:
+            self.hasher = UnifiedHasher(hash_method)
+            self.logger.info(f"Initialized hasher with method: {hash_method}")
+        except (ImportError, ValueError) as e:
+            self.logger.warning(f"Failed to initialize {hash_method} hasher: {e}")
+            self.logger.info("Falling back to original hasher")
+            self.hasher = UnifiedHasher("original")
+            self.hash_method = "original"
+        
         self.comparator = EfficientComparator(similarity_threshold, num_workers)
         self.database = VideoDatabase(db_path)
         self._stop_requested = False
         
         self.logger.info(f"Initialized VideoScanner with similarity threshold {similarity_threshold}, "
-                         f"database path {db_path}, and {num_workers or 'default'} workers")
+                         f"hash method {self.hash_method}, database path {db_path}, "
+                         f"and {num_workers or 'default'} workers")
         
     def scan_directory(self, directory: str, use_cache: bool = True) -> List[Tuple[str, str, float]]:
         """

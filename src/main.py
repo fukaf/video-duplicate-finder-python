@@ -8,6 +8,14 @@ import sys
 import os
 from pathlib import Path
 
+# Fix for Pillow 10.0+ compatibility with older libraries
+try:
+    from PIL import Image
+    if not hasattr(Image, 'ANTIALIAS'):
+        Image.ANTIALIAS = Image.Resampling.LANCZOS
+except ImportError:
+    pass
+
 # Add src to path for relative imports
 src_path = Path(__file__).parent
 sys.path.insert(0, str(src_path))

@@ -165,6 +165,22 @@ class MainWindow:
         self.cores_scale.configure(command=self.update_cores_label)
         
         cores_frame.columnconfigure(0, weight=1)
+        
+        # Hash method setting
+        ttk.Label(settings_frame, text="Hash Method:").grid(row=3, column=0, sticky=tk.W, pady=(5,0))
+        
+        self.hash_method_var = tk.StringVar(value="original")
+        hash_method_frame = ttk.Frame(settings_frame)
+        hash_method_frame.grid(row=3, column=1, sticky=(tk.W, tk.E), padx=5, pady=(5,0))
+        
+        hash_method_combo = ttk.Combobox(hash_method_frame, textvariable=self.hash_method_var,
+                                       values=["original", "videohash"], state="readonly", width=12)
+        hash_method_combo.grid(row=0, column=0, sticky=tk.W)
+        
+        # Add tooltip for hash method
+        hash_info_label = ttk.Label(hash_method_frame, text="ⓘ", foreground="blue", cursor="question_arrow")
+        hash_info_label.grid(row=0, column=1, padx=(5,0))
+        hash_info_label.bind("<Button-1>", self.show_hash_method_info)
           # Control buttons
         control_frame = ttk.Frame(left_panel)
         control_frame.grid(row=2, column=0, columnspan=2, pady=10)
@@ -387,7 +403,8 @@ class MainWindow:
             filename = filedialog.asksaveasfilename(
                 defaultextension=".log",
                 filetypes=[("Log files", "*.log"), ("Text files", "*.txt"), ("All files", "*.*")],
-                title="Save Log File"            )
+                title="Save Log File"
+            )
             
             if filename:
                 content = self.log_text.get(1.0, tk.END)
@@ -410,6 +427,18 @@ class MainWindow:
     def update_cores_label(self, value):
         self.cores_label.config(text=f"{int(float(value))}")
     
+    def show_hash_method_info(self, event):
+        """Show information about hash methods"""
+        info_text = """Hash Method Information:
+
+• Original: Custom perceptual hashing algorithm using frame sampling and multiple hash techniques (dhash, phash, whash). Good for general duplicate detection.
+
+• VideoHash: Uses the videohash library's advanced perceptual hashing algorithm. Better for detecting near-duplicates with modifications like watermarks, cropping, or color changes.
+
+Note: VideoHash requires FFmpeg to be installed on your system."""
+        
+        messagebox.showinfo("Hash Method Information", info_text)
+    
     def start_scan(self):
         directory = self.dir_var.get()
         if not directory or not Path(directory).exists():
@@ -420,6 +449,7 @@ class MainWindow:
         self.logger.info(f"Similarity threshold: {self.threshold_var.get()}")
         self.logger.info(f"Use cache: {self.use_cache_var.get()}")
         self.logger.info(f"CPU cores: {int(self.cpu_cores_var.get())}")
+        self.logger.info(f"Hash method: {self.hash_method_var.get()}")
         
         self.scan_button.config(state=tk.DISABLED)
         self.stop_button.config(state=tk.NORMAL)
@@ -449,7 +479,8 @@ class MainWindow:
                 similarity_threshold=self.threshold_var.get(),
                 progress_callback=self.update_progress,
                 num_workers=int(self.cpu_cores_var.get()),
-                logger=self.logger
+                logger=self.logger,
+                hash_method=self.hash_method_var.get()
             )
             
             self.logger.info("Scanner initialized, starting directory scan...")
@@ -638,7 +669,9 @@ class MainWindow:
             sys.path.insert(0, str(src_path))
             from core.scanner import VideoScanner
             
-            scanner = VideoScanner(num_workers=int(self.cpu_cores_var.get()), logger=self.logger)
+            scanner = VideoScanner(num_workers=int(self.cpu_cores_var.get()), 
+                                  logger=self.logger, 
+                                  hash_method=self.hash_method_var.get())
             thumbnail_path = scanner.get_file_thumbnail(file_path)
             
             if thumbnail_path and os.path.exists(thumbnail_path) and PIL_AVAILABLE:
@@ -684,7 +717,8 @@ class MainWindow:
             sys.path.insert(0, str(src_path))
             from core.scanner import VideoScanner
             
-            scanner = VideoScanner(num_workers=int(self.cpu_cores_var.get()))
+            scanner = VideoScanner(num_workers=int(self.cpu_cores_var.get()), 
+                                  hash_method=self.hash_method_var.get())
             scanner.clear_cache()
             self.logger.info("Cache cleared successfully")
             messagebox.showinfo("Cache Cleared", "All cached data has been cleared")
@@ -720,7 +754,9 @@ class MainWindow:
             sys.path.insert(0, str(src_path))
             from core.scanner import VideoScanner
             
-            scanner = VideoScanner(num_workers=int(self.cpu_cores_var.get()), logger=self.logger)
+            scanner = VideoScanner(num_workers=int(self.cpu_cores_var.get()), 
+                                  logger=self.logger, 
+                                  hash_method=self.hash_method_var.get())
             
             def progress_callback(current, total):
                 progress = (current / total) * 100 if total > 0 else 0
@@ -1003,7 +1039,9 @@ class MainWindow:
             sys.path.insert(0, str(src_path))
             from core.scanner import VideoScanner
             
-            scanner = VideoScanner(num_workers=int(self.cpu_cores_var.get()), logger=self.logger)
+            scanner = VideoScanner(num_workers=int(self.cpu_cores_var.get()), 
+                                  logger=self.logger, 
+                                  hash_method=self.hash_method_var.get())
             duplicates = scanner.compare_existing_database()
             
             if duplicates:
@@ -1030,7 +1068,9 @@ class MainWindow:
             sys.path.insert(0, str(src_path))
             from core.scanner import VideoScanner
             
-            scanner = VideoScanner(num_workers=int(self.cpu_cores_var.get()), logger=self.logger)
+            scanner = VideoScanner(num_workers=int(self.cpu_cores_var.get()), 
+                                  logger=self.logger, 
+                                  hash_method=self.hash_method_var.get())
             stats = scanner.get_database_stats()
             
             if stats:
