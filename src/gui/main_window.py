@@ -443,11 +443,13 @@ class MainWindow:
             src_path = Path(__file__).parent.parent
             sys.path.insert(0, str(src_path))
             from core.scanner import VideoScanner
-              # Store scanner instance so stop button can access it
+            
+            # Store scanner instance so stop button can access it
             self.scanner = VideoScanner(
                 similarity_threshold=self.threshold_var.get(),
                 progress_callback=self.update_progress,
-                num_workers=int(self.cpu_cores_var.get())
+                num_workers=int(self.cpu_cores_var.get()),
+                logger=self.logger
             )
             
             self.logger.info("Scanner initialized, starting directory scan...")
@@ -636,7 +638,7 @@ class MainWindow:
             sys.path.insert(0, str(src_path))
             from core.scanner import VideoScanner
             
-            scanner = VideoScanner(num_workers=int(self.cpu_cores_var.get()))
+            scanner = VideoScanner(num_workers=int(self.cpu_cores_var.get()), logger=self.logger)
             thumbnail_path = scanner.get_file_thumbnail(file_path)
             
             if thumbnail_path and os.path.exists(thumbnail_path) and PIL_AVAILABLE:
@@ -651,7 +653,7 @@ class MainWindow:
                 self.thumbnail_label.config(image="", text="No thumbnail available")
                 self.thumbnail_label.image = None
         except Exception as e:
-            print(f"Error loading thumbnail: {e}")
+            self.logger.error(f"Error loading thumbnail: {e}")
             self.thumbnail_label.config(image="", text="Thumbnail error")
             self.thumbnail_label.image = None
     
@@ -684,8 +686,10 @@ class MainWindow:
             
             scanner = VideoScanner(num_workers=int(self.cpu_cores_var.get()))
             scanner.clear_cache()
+            self.logger.info("Cache cleared successfully")
             messagebox.showinfo("Cache Cleared", "All cached data has been cleared")
         except Exception as e:
+            self.logger.error(f"Failed to clear cache: {e}")
             messagebox.showerror("Error", f"Failed to clear cache: {e}")
     
     def generate_thumbnails(self):
@@ -716,7 +720,7 @@ class MainWindow:
             sys.path.insert(0, str(src_path))
             from core.scanner import VideoScanner
             
-            scanner = VideoScanner(num_workers=int(self.cpu_cores_var.get()))
+            scanner = VideoScanner(num_workers=int(self.cpu_cores_var.get()), logger=self.logger)
             
             def progress_callback(current, total):
                 progress = (current / total) * 100 if total > 0 else 0
@@ -728,6 +732,7 @@ class MainWindow:
             
         except Exception as e:
             error_msg = f"Thumbnail generation failed: {e}"
+            self.logger.error(error_msg)
             self.root.after(0, lambda msg=error_msg: messagebox.showerror("Error", msg))
     
     def open_selected_file(self):
@@ -998,7 +1003,7 @@ class MainWindow:
             sys.path.insert(0, str(src_path))
             from core.scanner import VideoScanner
             
-            scanner = VideoScanner(num_workers=int(self.cpu_cores_var.get()))
+            scanner = VideoScanner(num_workers=int(self.cpu_cores_var.get()), logger=self.logger)
             duplicates = scanner.compare_existing_database()
             
             if duplicates:
@@ -1014,6 +1019,7 @@ class MainWindow:
                 
         except Exception as e:
             error_msg = f"Database comparison failed: {e}"
+            self.logger.error(error_msg)
             self.root.after(0, lambda msg=error_msg: messagebox.showerror("Error", msg))
             self.root.after(0, lambda: self.status_label.config(text="Database comparison failed"))
     
@@ -1024,23 +1030,25 @@ class MainWindow:
             sys.path.insert(0, str(src_path))
             from core.scanner import VideoScanner
             
-            scanner = VideoScanner(num_workers=int(self.cpu_cores_var.get()))
+            scanner = VideoScanner(num_workers=int(self.cpu_cores_var.get()), logger=self.logger)
             stats = scanner.get_database_stats()
             
             if stats:
                 stats_text = f"""Database Statistics:
 
-Total Files: {stats['total_files']}
-Files with Hashes: {stats['files_with_hashes']}
-Existing Files: {stats['existing_files']}
-Missing Files: {stats['missing_files']}
-Total Size: {stats['total_size_mb']:.1f} MB
-Database Path: {stats['database_path']}
+                            Total Files: {stats['total_files']}
+                            Files with Hashes: {stats['files_with_hashes']}
+                            Existing Files: {stats['existing_files']}
+                            Missing Files: {stats['missing_files']}
+                            Total Size: {stats['total_size_mb']:.1f} MB
+                            Database Path: {stats['database_path']}
 
-Ready for comparison: {stats['files_with_hashes']} files"""
+                            Ready for comparison: {stats['files_with_hashes']} files"""
                 
+                self.logger.info("Database statistics retrieved successfully")
                 messagebox.showinfo("Database Statistics", stats_text)
             else:
+                self.logger.warning("No statistics available from database")
                 messagebox.showwarning("Database Stats", "Could not retrieve database statistics")
                 
         except Exception as e:

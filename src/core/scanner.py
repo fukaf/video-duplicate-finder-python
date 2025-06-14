@@ -7,6 +7,7 @@ import hashlib
 import json
 from datetime import datetime
 import threading
+import logging
 
 from .hasher import PerceptualHasher
 from .comparator import EfficientComparator
@@ -19,14 +20,19 @@ class VideoScanner:
     def __init__(self, similarity_threshold: float = 0.8, 
                  progress_callback: Optional[Callable[[int, int], None]] = None,
                  db_path: str = "video_duplicates.db",
-                 num_workers: Optional[int] = None):
+                 num_workers: Optional[int] = None,
+                 logger: Optional[logging.Logger] = None):
         self.similarity_threshold = similarity_threshold
         self.progress_callback = progress_callback
         self.num_workers = num_workers
+        self.logger = logger or logging.getLogger(__name__)
         self.hasher = PerceptualHasher()
         self.comparator = EfficientComparator(similarity_threshold, num_workers)
         self.database = VideoDatabase(db_path)
         self._stop_requested = False
+        
+        self.logger.info(f"Initialized VideoScanner with similarity threshold {similarity_threshold}, "
+                         f"database path {db_path}, and {num_workers or 'default'} workers")
         
     def scan_directory(self, directory: str, use_cache: bool = True) -> List[Tuple[str, str, float]]:
         """
@@ -39,27 +45,35 @@ class VideoScanner:
         """
         try:
             self._stop_requested = False
+            self.logger.info(f"Starting scan in directory: {directory}")
             
             # Step 1: Find all video files
             video_files = self._find_video_files(directory)
             if not video_files:
+                self.logger.warning(f"No video files found in directory: {directory}")
                 return []
+            
+            self.logger.info(f"Found {len(video_files)} video files to process")
             
             # Step 2: Process files and compute hashes
             file_hashes = self._process_files(video_files, use_cache)
             
             if self._stop_requested:
+                self.logger.info("Scan stopped by user")
                 return []
-              # Step 3: Find duplicates efficiently
+            
+            # Step 3: Find duplicates efficiently
+            self.logger.info("Starting duplicate comparison...")
             duplicates = self.comparator.find_duplicates_parallel(file_hashes)
             
             # Step 4: Group duplicates by similarity clusters
             grouped_duplicates = self._group_duplicates(duplicates)
             
+            self.logger.info(f"Scan complete. Found {len(grouped_duplicates)} duplicate pairs")
             return grouped_duplicates
             
         except Exception as e:
-            print(f"Error during scan: {e}")
+            self.logger.error(f"Error during scan: {e}")
             return []
     
     def _find_video_files(self, directory: str) -> List[str]:
@@ -80,23 +94,26 @@ class VideoScanner:
         total_files = len(video_files)
         processed = 0
         
-        print(f"Processing {total_files} video files...")
+        self.logger.info(f"Processing {total_files} video files...")
         
         for file_path in video_files:
             if self._stop_requested:
                 break
                 
-            print(f"Processing file {processed + 1}/{total_files}: {Path(file_path).name}")
+            self.logger.debug(f"Processing file {processed + 1}/{total_files}: {Path(file_path).name}")
                 
-            try:                # Check cache first
+            try:                
+                # Check cache first
                 cached_hash = None
                 if use_cache:
                     cached_hash = self.database.get_file_hash(file_path)
                 
                 if cached_hash:
                     file_hashes[file_path] = cached_hash
+                    self.logger.debug(f"Using cached hash for {file_path}")
                 else:
                     # Compute new hash
+                    self.logger.debug(f"Computing hash for {file_path}")
                     file_hash = self.hasher.compute_video_hash(file_path)
                     if self._stop_requested:
                         break
@@ -106,16 +123,18 @@ class VideoScanner:
                         # Store in database
                         file_info = self._get_file_info(file_path)
                         self.database.store_file_hash(file_path, file_hash, file_info)
+                        self.logger.debug(f"Stored hash for {file_path} in database")
                 
                 processed += 1
                 if self.progress_callback:
                     self.progress_callback(processed, total_files)
                     
             except Exception as e:
-                print(f"Error processing {file_path}: {e}")
+                self.logger.error(f"Error processing {file_path}: {e}")
                 processed += 1
                 continue
         
+        self.logger.info(f"Processed {processed} files")
         return file_hashes
     
     def _get_file_info(self, file_path: str) -> Dict:
@@ -164,7 +183,7 @@ class VideoScanner:
             return file_info
             
         except Exception as e:
-            print(f"Error getting file info for {file_path}: {e}")
+            self.logger.warning(f"Error getting file info for {file_path}: {e}")
             stat = os.stat(file_path)
             return {
                 'size': stat.st_size,
@@ -205,11 +224,14 @@ class VideoScanner:
         generator = ThumbnailGenerator()
         total = len(file_paths)
         
+        self.logger.info(f"Generating thumbnails for {total} files...")
+        
         for i, file_path in enumerate(file_paths):
             if self._stop_requested:
                 break
                 
             try:
+                self.logger.debug(f"Generating thumbnail for {file_path} ({i + 1}/{total})")
                 thumbnail_path = generator.generate_thumbnail(file_path)
                 if thumbnail_path:
                     self.database.store_file_thumbnail(file_path, thumbnail_path)
@@ -218,7 +240,7 @@ class VideoScanner:
                     progress_callback(i + 1, total)
                     
             except Exception as e:
-                print(f"Error generating thumbnail for {file_path}: {e}")
+                self.logger.error(f"Error generating thumbnail for {file_path}: {e}")
                 
     def compare_existing_database(self) -> List[Tuple[str, str, float]]:
         """
@@ -227,16 +249,16 @@ class VideoScanner:
             List of duplicate pairs with similarity scores from existing database entries
         """
         try:
-            print("Comparing existing database entries...")
+            self.logger.info("Comparing existing database entries...")
             
             # Get all files from database
             all_files = self.database.get_all_files()
             
             if len(all_files) < 2:
-                print(f"Need at least 2 files in database to compare. Found {len(all_files)} files.")
+                self.logger.warning(f"Need at least 2 files in database to compare. Found {len(all_files)} files.")
                 return []
             
-            print(f"Found {len(all_files)} files in database")
+            self.logger.info(f"Found {len(all_files)} files in database")
             
             # Extract file paths and hashes
             file_hashes = {}
@@ -251,22 +273,22 @@ class VideoScanner:
                     file_hashes[file_path] = file_hash
                     valid_files.append(file_path)
                 else:
-                    print(f"Skipping {file_path}: File missing or no hash")
+                    self.logger.debug(f"Skipping {file_path}: File missing or no hash")
             
             if len(file_hashes) < 2:
-                print(f"Need at least 2 valid files to compare. Found {len(file_hashes)} valid files.")
+                self.logger.warning(f"Need at least 2 valid files to compare. Found {len(file_hashes)} valid files.")
                 return []
             
-            print(f"Comparing {len(file_hashes)} valid files...")
+            self.logger.info(f"Comparing {len(file_hashes)} valid files...")
             
             # Use existing comparator to find duplicates
             duplicates = self.comparator.find_duplicates_parallel(file_hashes)
             
-            print(f"Found {len(duplicates)} duplicate pairs")
+            self.logger.info(f"Found {len(duplicates)} duplicate pairs")
             return duplicates
             
         except Exception as e:
-            print(f"Error comparing existing database: {e}")
+            self.logger.error(f"Error comparing existing database: {e}")
             return []
 
     def get_database_stats(self) -> Dict:
@@ -299,5 +321,5 @@ class VideoScanner:
                 'database_path': self.database.db_path
             }
         except Exception as e:
-            print(f"Error getting database stats: {e}")
+            self.logger.error(f"Error getting database stats: {e}")
             return {}
