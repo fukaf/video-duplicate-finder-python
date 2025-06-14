@@ -1,15 +1,23 @@
 # src/core/unified_hasher.py
 import os
 from typing import Optional, Union
-from .hasher import PerceptualHasher
 
-# Fix for Pillow 10.0+ compatibility
+# Fix for Pillow 10.0+ compatibility - must be done before any other PIL imports
 try:
     from PIL import Image
     if not hasattr(Image, 'ANTIALIAS'):
         Image.ANTIALIAS = Image.Resampling.LANCZOS
+        # Also add other deprecated constants for completeness
+        if not hasattr(Image, 'BICUBIC'):
+            Image.BICUBIC = Image.Resampling.BICUBIC
+        if not hasattr(Image, 'LANCZOS'):
+            Image.LANCZOS = Image.Resampling.LANCZOS
+        if not hasattr(Image, 'NEAREST'):
+            Image.NEAREST = Image.Resampling.NEAREST
 except ImportError:
     pass
+
+from .hasher import PerceptualHasher
 
 try:
     from videohash import VideoHash
@@ -39,8 +47,7 @@ class UnifiedHasher:
                 raise ImportError("videohash library is not installed. Please install it with: pip install videohash")
             # VideoHash doesn't need to be pre-initialized
             self.hasher = None
-        else:
-            raise ValueError(f"Unsupported hash method: {hash_method}. Use 'original' or 'videohash'")
+        else:            raise ValueError(f"Unsupported hash method: {hash_method}. Use 'original' or 'videohash'")
     
     def compute_video_hash(self, video_path: str) -> Optional[str]:
         """
@@ -50,7 +57,7 @@ class UnifiedHasher:
             video_path: Path to the video file
             
         Returns:
-            Hash string or None if failed
+            Hash string or serialized data for videohash, None if failed
         """
         if not os.path.exists(video_path):
             return None
@@ -61,8 +68,13 @@ class UnifiedHasher:
             elif self.hash_method == "videohash":
                 # Create VideoHash instance for this video
                 video_hash = VideoHash(path=video_path)
-                # Convert to hex string for consistency
-                return video_hash.hash_hex
+                # Convert hex string to integer for proper comparison
+                # Remove '0x' prefix and convert to int
+                hex_value = video_hash.hash_hex
+                if hex_value.startswith('0x'):
+                    hex_value = hex_value[2:]
+                # Store as integer string for database storage
+                return str(int(hex_value, 16))
         except Exception as e:
             # Log the error if logger is available
             print(f"Error computing hash for {video_path}: {e}")
@@ -84,20 +96,62 @@ class UnifiedHasher:
             
         try:
             if self.hash_method == "original":
-                # For original hasher, we need to convert back to format expected by comparator
-                # This is a simplified comparison - in practice you might want to use the full comparator
+                # For original hasher, use existing comparison logic
+                # This is a simplified comparison - you might want to use the full comparator
                 if hash1 == hash2:
                     return 1.0
                 # Simple Hamming distance for hex strings
                 return self._hamming_similarity(hash1, hash2)
             elif self.hash_method == "videohash":
-                # For videohash, we can use the library's comparison methods
-                # Convert hex strings back to VideoHash objects for comparison
-                # This is a simplified approach - ideally we'd store the VideoHash objects
-                return self._hamming_similarity(hash1, hash2)
+                # For videohash, compute Hamming distance between integer values
+                try:
+                    # Convert string representations back to integers
+                    val1 = int(hash1)
+                    val2 = int(hash2)
+                    
+                    # Calculate Hamming distance
+                    xor_result = val1 ^ val2
+                    hamming_distance = bin(xor_result).count('1')
+                    
+                    # Convert to similarity (64 bits total for videohash)
+                    total_bits = 64
+                    similarity = 1.0 - (hamming_distance / total_bits)
+                    
+                    return similarity
+                except (ValueError, TypeError):
+                    return 0.0
         except Exception as e:
             print(f"Error comparing hashes: {e}")
             return 0.0
+    
+    def is_similar_videohash(self, hash1: str, hash2: str, threshold: int = 10) -> bool:
+        """
+        Check if two videohash values are similar using the recommended method.
+        
+        Args:
+            hash1: First hash string
+            hash2: Second hash string
+            threshold: Maximum Hamming distance for similarity (default 10)
+            
+        Returns:
+            True if similar, False otherwise
+        """
+        if not hash1 or not hash2:
+            return False
+            
+        try:
+            # Convert string representations back to integers
+            val1 = int(hash1)
+            val2 = int(hash2)
+            
+            # Calculate Hamming distance
+            xor_result = val1 ^ val2
+            hamming_distance = bin(xor_result).count('1')
+            
+            # VideoHash typically considers videos similar if Hamming distance <= 10
+            return hamming_distance <= threshold
+        except (ValueError, TypeError):
+            return False
     
     def _hamming_similarity(self, hash1: str, hash2: str) -> float:
         """

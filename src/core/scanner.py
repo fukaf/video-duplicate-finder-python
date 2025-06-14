@@ -41,7 +41,7 @@ class VideoScanner:
             self.hasher = UnifiedHasher("original")
             self.hash_method = "original"
         
-        self.comparator = EfficientComparator(similarity_threshold, num_workers)
+        self.comparator = EfficientComparator(similarity_threshold, num_workers, self.hasher)
         self.database = VideoDatabase(db_path)
         self._stop_requested = False
         

@@ -1,15 +1,16 @@
 # src/core/comparator.py
 from collections import defaultdict
-from typing import List, Tuple, Dict
+from typing import List, Tuple, Dict, Optional
 from concurrent.futures import ThreadPoolExecutor, ProcessPoolExecutor
 import multiprocessing as mp
 
 class EfficientComparator:
     """O(n) duplicate detection using hash bucketing"""
     
-    def __init__(self, similarity_threshold: float = 0.8, num_workers: int = None):
+    def __init__(self, similarity_threshold: float = 0.8, num_workers: int = None, hasher=None):
         self.similarity_threshold = similarity_threshold
         self.num_workers = num_workers or mp.cpu_count()
+        self.hasher = hasher  # Accept a hasher instance for comparison
         
     def find_duplicates(self, file_hashes: Dict[str, str]) -> List[Tuple[str, str, float]]:
         """
@@ -52,13 +53,25 @@ class EfficientComparator:
     def _get_bucket_key(self, file_hash: str) -> str:
         """Extract bucket key from hash for grouping similar hashes"""
         try:
-            # Use the MD5 part of the hash (more stable)
-            parts = file_hash.split(':', 2)
-            if len(parts) >= 2:
-                # Use first 8 characters of MD5 for bucketing
-                return parts[1][:8]
+            # Check if this looks like a videohash (numeric string) or original hash (contains colons)
+            if ':' in file_hash:
+                # Original hash format with colons
+                parts = file_hash.split(':', 2)
+                if len(parts) >= 2:
+                    # Use first 8 characters of MD5 for bucketing
+                    return parts[1][:8]
+                else:
+                    return file_hash[:8]
             else:
-                return file_hash[:8]
+                # VideoHash format (integer string) - use first few bits for bucketing
+                try:
+                    hash_int = int(file_hash)
+                    # Use high-order bits for bucketing (less likely to vary for similar videos)
+                    bucket_bits = (hash_int >> 56) & 0xFF  # Top 8 bits
+                    return f"vh_{bucket_bits:02x}"
+                except ValueError:
+                    # Fallback to string prefix
+                    return file_hash[:8]
         except:
             return "unknown"
     
@@ -72,9 +85,14 @@ class EfficientComparator:
                 file1, file2 = bucket_files[i], bucket_files[j]
                 hash1, hash2 = file_hashes[file1], file_hashes[file2]
                 
-                from .hasher import PerceptualHasher
-                hasher = PerceptualHasher()
-                similarity = hasher.compute_similarity(hash1, hash2)
+                # Use the provided hasher or fall back to original
+                if self.hasher:
+                    similarity = self.hasher.compare_hashes(hash1, hash2)
+                else:
+                    # Fallback to original hasher
+                    from .hasher import PerceptualHasher
+                    hasher = PerceptualHasher()
+                    similarity = hasher.compute_similarity(hash1, hash2)
                 
                 if similarity >= self.similarity_threshold:
                     duplicates.append((file1, file2, similarity))
