@@ -276,8 +276,7 @@ class MainWindow:
                 label = ttk.Label(quality_frame, textvariable=var, wraplength=250)
             else:
                 label = ttk.Label(quality_frame, textvariable=var)
-            label.grid(row=i, column=1, sticky=tk.W, padx=5)
-        
+            label.grid(row=i, column=1, sticky=tk.W, padx=5)        
         # Quality recommendation frame
         recommendation_frame = ttk.LabelFrame(parent, text="Recommendation", padding="5")
         recommendation_frame.grid(row=2, column=0, sticky=(tk.W, tk.E), pady=5)
@@ -299,7 +298,8 @@ class MainWindow:
         ttk.Button(action_frame, text="Open File", command=self.open_selected_file).grid(row=0, column=1, padx=5)
         ttk.Button(action_frame, text="Delete File", command=self.delete_selected_file).grid(row=0, column=2, padx=5)
         ttk.Button(action_frame, text="Show in Explorer", command=self.show_in_explorer).grid(row=1, column=0, padx=5)
-        ttk.Button(action_frame, text="Auto-Delete Lower Quality", command=self.auto_delete_lower_quality).grid(row=1, column=1, columnspan=2, padx=5)
+        ttk.Button(action_frame, text="Auto-Delete Lower Quality", command=self.auto_delete_lower_quality).grid(row=1, column=1, padx=5)
+        ttk.Button(action_frame, text="Delete All Low Quality", command=self.delete_all_low_quality).grid(row=1, column=2, padx=5)
         
         parent.columnconfigure(0, weight=1)
     
@@ -977,8 +977,7 @@ class MainWindow:
                 messagebox.showinfo("Deletion Complete", 
                                   f"Successfully deleted {deleted_count} files\n"
                                   f"Space saved: {space_saved:.1f} MB")
-                
-                # Update group display
+                  # Update group display
                 remaining_children = len(self.results_tree.get_children(group_item))
                 if remaining_children == 0:
                     self.results_tree.delete(group_item)
@@ -990,6 +989,184 @@ class MainWindow:
                 
         except Exception as e:
             messagebox.showerror("Error", f"Failed to auto-delete files: {e}")
+
+    def delete_all_low_quality(self):
+        """Delete all low quality files in all duplicate groups at once"""
+        if not self.duplicate_groups:
+            messagebox.showwarning("No Duplicates", "No duplicate groups found. Please scan for duplicates first.")
+            return
+        
+        # Confirm the operation
+        total_groups = len(self.duplicate_groups)
+        result = messagebox.askyesno("Confirm Batch Delete", 
+                                   f"Delete all low quality files in {total_groups} duplicate groups?\n\n"
+                                   f"This will analyze each group and delete lower quality duplicates.\n"
+                                   f"Groups where low quality videos are much longer will be skipped.")
+        
+        if not result:
+            return
+        
+        try:
+            src_path = Path(__file__).parent.parent
+            sys.path.insert(0, str(src_path))
+            from core.quality_analyzer import VideoQualityAnalyzer
+            from core.database import VideoDatabase
+            
+            quality_analyzer = VideoQualityAnalyzer()
+            db = VideoDatabase()
+            
+            # Track statistics
+            total_deleted = 0
+            total_space_saved = 0.0
+            skipped_groups = []
+            processed_groups = 0
+            
+            # Progress tracking
+            self.logger.info(f"Starting batch deletion of low quality files in {total_groups} groups...")
+            
+            for group_index, file_paths in enumerate(self.duplicate_groups):
+                try:
+                    if len(file_paths) < 2:
+                        continue
+                    
+                    self.logger.info(f"Processing group {group_index + 1}/{total_groups}: {len(file_paths)} files")
+                    
+                    # Analyze group quality
+                    group_analysis = quality_analyzer.analyze_duplicate_group(file_paths)
+                    
+                    if not group_analysis['recommendation']['delete']:
+                        self.logger.info(f"Group {group_index + 1}: No files recommended for deletion")
+                        continue
+                    
+                    # Check for duration mismatch (skip if low quality file is much longer)
+                    best_file = group_analysis['recommendation']['best_file']
+                    files_to_delete = group_analysis['recommendation']['delete']
+                    
+                    should_skip = False
+                    skip_reason = ""
+                    
+                    for delete_path in files_to_delete:
+                        # Find the file data for this delete path
+                        delete_file_data = None
+                        for file_data in group_analysis['files']:
+                            if file_data['path'] == delete_path:
+                                delete_file_data = file_data
+                                break
+                        
+                        if delete_file_data:
+                            best_duration = best_file['metadata'].get('duration', 0)
+                            delete_duration = delete_file_data['metadata'].get('duration', 0)
+                            
+                            # Skip if the "low quality" file is significantly longer (more than 20% longer)
+                            if delete_duration > best_duration * 1.2 and delete_duration > best_duration + 30:
+                                should_skip = True
+                                skip_reason = f"Low quality file is much longer ({delete_duration:.1f}s vs {best_duration:.1f}s)"
+                                break
+                    
+                    if should_skip:
+                        self.logger.warning(f"Group {group_index + 1}: Skipped - {skip_reason}")
+                        skipped_groups.append({
+                            'group_index': group_index + 1,
+                            'reason': skip_reason,
+                            'files': [Path(f).name for f in file_paths]
+                        })
+                        continue
+                    
+                    # Delete the files
+                    group_deleted = 0
+                    group_space_saved = 0.0
+                    
+                    for delete_path in files_to_delete:
+                        try:
+                            # Get file size before deletion
+                            file_size_mb = 0
+                            for file_data in group_analysis['files']:
+                                if file_data['path'] == delete_path:
+                                    file_size_mb = file_data['metadata'].get('file_size_mb', 0)
+                                    break
+                            
+                            # Delete the actual file
+                            if os.path.exists(delete_path):
+                                os.remove(delete_path)
+                                group_deleted += 1
+                                group_space_saved += file_size_mb
+                                self.logger.info(f"Deleted: {Path(delete_path).name} ({file_size_mb:.1f} MB)")
+                                
+                                # Remove from database (includes thumbnail cleanup)
+                                db._remove_file(delete_path)
+                            
+                        except Exception as file_e:
+                            self.logger.error(f"Failed to delete {Path(delete_path).name}: {file_e}")
+                    
+                    if group_deleted > 0:
+                        total_deleted += group_deleted
+                        total_space_saved += group_space_saved
+                        processed_groups += 1
+                        self.logger.info(f"Group {group_index + 1}: Deleted {group_deleted} files, saved {group_space_saved:.1f} MB")
+                    
+                except Exception as group_e:
+                    self.logger.error(f"Error processing group {group_index + 1}: {group_e}")
+                    continue
+            
+            # Show summary
+            summary_msg = f"Batch deletion completed!\n\n"
+            summary_msg += f"Processed: {processed_groups} groups\n"
+            summary_msg += f"Files deleted: {total_deleted}\n"
+            summary_msg += f"Space saved: {total_space_saved:.1f} MB\n"
+            
+            if skipped_groups:
+                summary_msg += f"\nSkipped groups: {len(skipped_groups)}\n"
+                summary_msg += "(Groups skipped due to duration mismatches)"
+            
+            self.logger.info(summary_msg.replace('\n', ' '))
+            messagebox.showinfo("Batch Deletion Complete", summary_msg)
+            
+            # Show details of skipped groups if any
+            if skipped_groups:
+                skip_details = "Skipped Groups (duration mismatches):\n\n"
+                for skip_info in skipped_groups[:10]:  # Show first 10
+                    skip_details += f"Group {skip_info['group_index']}: {skip_info['reason']}\n"
+                    skip_details += f"Files: {', '.join(skip_info['files'][:3])}"
+                    if len(skip_info['files']) > 3:
+                        skip_details += f" + {len(skip_info['files']) - 3} more"
+                    skip_details += "\n\n"
+                
+                if len(skipped_groups) > 10:
+                    skip_details += f"... and {len(skipped_groups) - 10} more groups"
+                
+                # Create a new window to show skipped groups
+                self._show_skipped_groups_dialog(skip_details)
+            
+            # Refresh the results view
+            self.logger.info("Refreshing results view...")
+            self.compare_database()
+            
+        except Exception as e:
+            error_msg = f"Failed to perform batch deletion: {e}"
+            self.logger.error(error_msg)
+            messagebox.showerror("Error", error_msg)
+
+    def _show_skipped_groups_dialog(self, details_text):
+        """Show a dialog with details of skipped groups"""
+        dialog = tk.Toplevel(self.root)
+        dialog.title("Skipped Groups Details")
+        dialog.geometry("600x400")
+        dialog.transient(self.root)
+        dialog.grab_set()
+        
+        # Text widget with scrollbar
+        frame = ttk.Frame(dialog, padding="10")
+        frame.pack(fill=tk.BOTH, expand=True)
+        
+        text_widget = scrolledtext.ScrolledText(frame, wrap=tk.WORD, state=tk.NORMAL)
+        text_widget.pack(fill=tk.BOTH, expand=True)
+        text_widget.insert(tk.END, details_text)
+        text_widget.configure(state=tk.DISABLED)
+        
+        # Close button
+        button_frame = ttk.Frame(frame)
+        button_frame.pack(fill=tk.X, pady=(10, 0))
+        ttk.Button(button_frame, text="Close", command=dialog.destroy).pack(side=tk.RIGHT)
 
     def compare_database(self):
         """Compare existing files in database for duplicates"""
