@@ -687,14 +687,27 @@ class MainWindow:
             scanner = VideoScanner(num_workers=int(self.cpu_cores_var.get()), logger=self.logger)
             thumbnail_path = scanner.get_file_thumbnail(file_path)
             
+            self.logger.debug(f"Loading thumbnail for {file_path}")
+            self.logger.debug(f"Thumbnail path from database: {thumbnail_path}")
+            
             if thumbnail_path and os.path.exists(thumbnail_path) and PIL_AVAILABLE:
                 # Load and display thumbnail
+                self.logger.debug(f"Loading thumbnail from {thumbnail_path}")
                 image = Image.open(thumbnail_path)
                 image = image.resize((200, 150), Image.Resampling.LANCZOS)
                 photo = ImageTk.PhotoImage(image)
                 
                 self.thumbnail_label.config(image=photo, text="")
-                self.thumbnail_label.image = photo  # Keep a reference            else:
+                self.thumbnail_label.image = photo  # Keep a reference
+                self.logger.debug("Thumbnail loaded and displayed successfully")
+            else:
+                if not thumbnail_path:
+                    self.logger.debug("No thumbnail path found in database")
+                elif not os.path.exists(thumbnail_path):
+                    self.logger.debug(f"Thumbnail file does not exist: {thumbnail_path}")
+                elif not PIL_AVAILABLE:
+                    self.logger.debug("PIL not available for thumbnail display")
+                    
                 self.thumbnail_label.config(image="", text="No thumbnail available")
                 self.thumbnail_label.image = None
         except Exception as e:

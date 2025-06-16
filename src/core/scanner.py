@@ -195,8 +195,7 @@ class VideoScanner:
         """Group duplicate pairs into clusters"""
         if not duplicates:
             return []
-        
-        # For now, return sorted by similarity
+          # For now, return sorted by similarity
         # TODO: Implement proper clustering algorithm
         return sorted(duplicates, key=lambda x: x[2], reverse=True)
     
@@ -221,10 +220,14 @@ class VideoScanner:
         """Generate thumbnails for video files"""
         from .thumbnail import ThumbnailGenerator
         
-        generator = ThumbnailGenerator()
+        # Use absolute path for thumbnails directory
+        src_dir = Path(__file__).parent.parent
+        thumbnail_dir = src_dir / "thumbnails"
+        
+        generator = ThumbnailGenerator(str(thumbnail_dir))
         total = len(file_paths)
         
-        self.logger.info(f"Generating thumbnails for {total} files...")
+        self.logger.info(f"Generating thumbnails for {total} files in {thumbnail_dir}...")
         
         for i, file_path in enumerate(file_paths):
             if self._stop_requested:
@@ -235,6 +238,9 @@ class VideoScanner:
                 thumbnail_path = generator.generate_thumbnail(file_path)
                 if thumbnail_path:
                     self.database.store_file_thumbnail(file_path, thumbnail_path)
+                    self.logger.debug(f"Stored thumbnail: {thumbnail_path}")
+                else:
+                    self.logger.warning(f"Failed to generate thumbnail for {file_path}")
                     
                 if progress_callback:
                     progress_callback(i + 1, total)
