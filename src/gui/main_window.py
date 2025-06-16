@@ -3,6 +3,8 @@ import tkinter as tk
 from tkinter import ttk, filedialog, messagebox, scrolledtext
 from pathlib import Path
 import threading
+import multiprocessing
+import io
 from typing import List
 import os
 import sys
@@ -60,35 +62,19 @@ class MainWindow:
         # Create formatter
         formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s', 
                                     datefmt='%H:%M:%S')
+          # We'll add the text handler after creating the text widget
+        self.log_formatter = formatter
         
-        # We'll add the text handler after creating the text widget
-        self.log_formatter = formatter    
     def run(self):
         """Start the application"""
         self.root.mainloop()
-
+    
     def setup_ui(self):
-        # Create main container with notebook for tabs
+        # Create main container for the scanner interface
         main_container = ttk.Frame(self.root, padding="5")
         main_container.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
-        
-        # Create notebook for tabbed interface
-        notebook = ttk.Notebook(main_container)
-        notebook.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
-        
-        # Main tab for scanning and results
-        main_tab = ttk.Frame(notebook)
-        notebook.add(main_tab, text="Scanner")
-        
-        # Log tab for debug output
-        log_tab = ttk.Frame(notebook)
-        notebook.add(log_tab, text="Log")
-        
-        # Setup main tab content
-        self.setup_main_tab(main_tab)
-        
-        # Setup log tab content
-        self.setup_log_tab(log_tab)
+          # Setup main scanner interface
+        self.setup_main_tab(main_container)
         
         # Configure grid weights
         main_container.columnconfigure(0, weight=1)
@@ -230,14 +216,66 @@ class MainWindow:
         
         self.results_tree.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
         self.results_tree.bind("<<TreeviewSelect>>", self.on_file_select)
-        
-        # Scrollbar for results
+          # Scrollbar for results
         scrollbar = ttk.Scrollbar(results_frame, orient=tk.VERTICAL, command=self.results_tree.yview)
         scrollbar.grid(row=0, column=1, sticky=(tk.N, tk.S))
         self.results_tree.configure(yscrollcommand=scrollbar.set)
         
         results_frame.columnconfigure(0, weight=1)
         results_frame.rowconfigure(0, weight=1)
+        
+        # Log area at the bottom of the scanner tab
+        log_frame = ttk.LabelFrame(left_panel, text="Processing Log", padding="5")
+        log_frame.grid(row=5, column=0, columnspan=2, sticky=(tk.W, tk.E, tk.N, tk.S), pady=5)
+        
+        # Log control frame
+        log_control_frame = ttk.Frame(log_frame)
+        log_control_frame.grid(row=0, column=0, sticky=(tk.W, tk.E), pady=(0, 5))
+        
+        ttk.Label(log_control_frame, text="Log Level:").grid(row=0, column=0, padx=(0, 5))
+        
+        self.log_level_var = tk.StringVar(value="INFO")
+        log_level_combo = ttk.Combobox(log_control_frame, textvariable=self.log_level_var, 
+                                     values=["DEBUG", "INFO", "WARNING", "ERROR"], 
+                                     width=10, state="readonly")
+        log_level_combo.grid(row=0, column=1, padx=5)
+        log_level_combo.bind("<<ComboboxSelected>>", self.change_log_level)
+        
+        ttk.Button(log_control_frame, text="Clear Log", command=self.clear_log).grid(row=0, column=2, padx=5)
+        ttk.Button(log_control_frame, text="Save Log", command=self.save_log).grid(row=0, column=3, padx=5)
+        
+        # Log text widget with scrollbar
+        log_text_frame = ttk.Frame(log_frame)
+        log_text_frame.grid(row=1, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
+        
+        self.log_text = tk.Text(log_text_frame, wrap=tk.WORD, state='disabled', height=8,
+                               font=('Consolas', 9), bg='#f8f8f8', fg='#333333')
+        self.log_text.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
+        
+        log_scrollbar = ttk.Scrollbar(log_text_frame, orient=tk.VERTICAL, command=self.log_text.yview)
+        log_scrollbar.grid(row=0, column=1, sticky=(tk.N, tk.S))
+        self.log_text.configure(yscrollcommand=log_scrollbar.set)
+        
+        # Configure text tags for different log levels
+        self.log_text.tag_configure("DEBUG", foreground="#666666")
+        self.log_text.tag_configure("INFO", foreground="#000000")
+        self.log_text.tag_configure("WARNING", foreground="#ff8c00")
+        self.log_text.tag_configure("ERROR", foreground="#dc143c")
+        self.log_text.tag_configure("CRITICAL", foreground="#8b0000", font=('Consolas', 9, 'bold'))
+        
+        # Configure log frame grid weights
+        log_frame.columnconfigure(0, weight=1)
+        log_frame.rowconfigure(1, weight=1)
+        log_text_frame.columnconfigure(0, weight=1)
+        log_text_frame.rowconfigure(0, weight=1)
+        
+        # Configure main grid weights
+        left_panel.columnconfigure(1, weight=1)
+        left_panel.rowconfigure(4, weight=2)  # Results tree gets more space
+        left_panel.rowconfigure(5, weight=1)  # Log area gets less space
+        main_frame.columnconfigure(0, weight=2)
+        main_frame.columnconfigure(1, weight=1)
+        main_frame.rowconfigure(0, weight=1)
         
         # Right panel for thumbnails and details
         self.setup_preview_panel(right_panel)
@@ -303,54 +341,6 @@ class MainWindow:
         
         parent.columnconfigure(0, weight=1)
     
-    def setup_log_tab(self, parent):
-        """Setup the log tab with scrollable text widget"""
-        log_frame = ttk.Frame(parent, padding="5")
-        log_frame.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
-        
-        # Log control frame
-        control_frame = ttk.Frame(log_frame)
-        control_frame.grid(row=0, column=0, sticky=(tk.W, tk.E), pady=(0, 5))
-        
-        ttk.Label(control_frame, text="Log Level:").grid(row=0, column=0, padx=(0, 5))
-        
-        self.log_level_var = tk.StringVar(value="INFO")
-        log_level_combo = ttk.Combobox(control_frame, textvariable=self.log_level_var, 
-                                     values=["DEBUG", "INFO", "WARNING", "ERROR"], 
-                                     width=10, state="readonly")
-        log_level_combo.grid(row=0, column=1, padx=5)
-        log_level_combo.bind("<<ComboboxSelected>>", self.change_log_level)
-        
-        ttk.Button(control_frame, text="Clear Log", command=self.clear_log).grid(row=0, column=2, padx=5)
-        ttk.Button(control_frame, text="Save Log", command=self.save_log).grid(row=0, column=3, padx=5)
-        
-        # Log text widget with scrollbar
-        text_frame = ttk.Frame(log_frame)
-        text_frame.grid(row=1, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
-        
-        self.log_text = tk.Text(text_frame, wrap=tk.WORD, state='disabled',
-                               font=('Consolas', 9), bg='#f8f8f8', fg='#333333')
-        self.log_text.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
-        
-        log_scrollbar = ttk.Scrollbar(text_frame, orient=tk.VERTICAL, command=self.log_text.yview)
-        log_scrollbar.grid(row=0, column=1, sticky=(tk.N, tk.S))
-        self.log_text.configure(yscrollcommand=log_scrollbar.set)
-        
-        # Configure text tags for different log levels
-        self.log_text.tag_configure("DEBUG", foreground="#666666")
-        self.log_text.tag_configure("INFO", foreground="#000000")
-        self.log_text.tag_configure("WARNING", foreground="#ff8c00")
-        self.log_text.tag_configure("ERROR", foreground="#dc143c")
-        self.log_text.tag_configure("CRITICAL", foreground="#8b0000", font=('Consolas', 9, 'bold'))
-        
-        # Configure grid weights
-        log_frame.columnconfigure(0, weight=1)
-        log_frame.rowconfigure(1, weight=1)
-        text_frame.columnconfigure(0, weight=1)
-        text_frame.rowconfigure(0, weight=1)
-        parent.columnconfigure(0, weight=1)
-        parent.rowconfigure(0, weight=1)
-    
     def setup_text_logging(self):
         """Setup the text widget logging handler"""
         # Create and configure the text handler
@@ -364,8 +354,7 @@ class MainWindow:
         # Also add console handler for backup
         console_handler = logging.StreamHandler()
         console_handler.setFormatter(self.log_formatter)
-        console_handler.setLevel(logging.WARNING)  # Only warnings and errors to console
-        self.logger.addHandler(console_handler)
+        console_handler.setLevel(logging.WARNING)  # Only warnings and errors to console        self.logger.addHandler(console_handler)
     
     def change_log_level(self, event=None):
         """Change the logging level"""
@@ -387,7 +376,8 @@ class MainWindow:
             filename = filedialog.asksaveasfilename(
                 defaultextension=".log",
                 filetypes=[("Log files", "*.log"), ("Text files", "*.txt"), ("All files", "*.*")],
-                title="Save Log File"            )
+                title="Save Log File"
+            )
             
             if filename:
                 content = self.log_text.get(1.0, tk.END)
@@ -398,6 +388,62 @@ class MainWindow:
         except Exception as e:
             self.logger.error(f"Failed to save log: {e}")
             messagebox.showerror("Error", f"Failed to save log: {e}")
+    
+    def add_info_message(self, message, message_type="info"):
+        """Add a message to the info text area and log it
+        
+        Args:
+            message (str): The message text
+            message_type (str): Type of message - "info", "success", "warning", "error", "progress"
+        """
+        # Ensure this runs in the main thread
+        if threading.current_thread() is not threading.main_thread():
+            self.root.after(0, lambda: self.add_info_message(message, message_type))
+            return
+            
+        try:
+            # Log the message too (except progress updates)
+            if message_type != "progress":
+                log_level = {
+                    "info": logging.INFO,
+                    "success": logging.INFO,
+                    "warning": logging.WARNING,
+                    "error": logging.ERROR,
+                }.get(message_type, logging.INFO)
+                
+                self.logger.log(log_level, message)
+            
+            # Also show important messages in the log text area for convenience
+            timestamp = datetime.now().strftime("%H:%M:%S")
+            formatted_message = f"[{timestamp}] {message}"
+            
+            # Add to log text widget if it exists
+            if hasattr(self, 'log_text'):
+                self.log_text.configure(state='normal')
+                
+                # Only keep the last 100 lines
+                line_count = int(self.log_text.index('end-1c').split('.')[0])
+                if line_count > 100:
+                    self.log_text.delete('1.0', '2.0')
+                
+                # Insert the new message with appropriate color
+                tag_name = {
+                    "info": "INFO",
+                    "success": "INFO", 
+                    "warning": "WARNING",
+                    "error": "ERROR",
+                    "progress": "DEBUG"
+                }.get(message_type, "INFO")
+                
+                self.log_text.insert(tk.END, formatted_message + "\n", tag_name)
+                
+                # Autoscroll to bottom
+                self.log_text.see(tk.END)
+                
+                # Make read-only again
+                self.log_text.configure(state='disabled')
+        except Exception as e:
+            print(f"Error adding info message: {e}")
     
     def browse_directory(self):
         directory = filedialog.askdirectory()
@@ -648,8 +694,7 @@ class MainWindow:
                 photo = ImageTk.PhotoImage(image)
                 
                 self.thumbnail_label.config(image=photo, text="")
-                self.thumbnail_label.image = photo  # Keep a reference
-            else:
+                self.thumbnail_label.image = photo  # Keep a reference            else:
                 self.thumbnail_label.config(image="", text="No thumbnail available")
                 self.thumbnail_label.image = None
         except Exception as e:
@@ -663,6 +708,27 @@ class MainWindow:
         self.stop_button.config(state=tk.DISABLED)
         self.progress_var.set(100)
         self.status_label.config(text="Scan complete")
+        
+        # Show completion message box
+        if hasattr(self, 'duplicate_groups') and self.duplicate_groups:
+            total_groups = len(self.duplicate_groups)
+            total_files = sum(len(group) for group in self.duplicate_groups)
+            
+            message = f"Scan completed successfully!\n\n"
+            message += f"Found {total_groups} duplicate groups containing {total_files} files.\n"
+            message += f"Check the results below for quality recommendations."
+            
+            messagebox.showinfo("Scan Complete", message)
+        else:
+            messagebox.showinfo("Scan Complete", 
+                              "Scan completed successfully!\n\n"
+                              "No duplicate files were found in the scanned directory.")
+        
+        # Add info message to the log area
+        if hasattr(self, 'duplicate_groups') and self.duplicate_groups:
+            self.add_info_message(f"Scan complete: Found {len(self.duplicate_groups)} duplicate groups", "success")
+        else:
+            self.add_info_message("Scan complete: No duplicates found", "info")
     
     def stop_scan(self):
         """Stop current scan"""
@@ -1182,7 +1248,7 @@ class MainWindow:
             for item in self.results_tree.get_children():
                 self.results_tree.delete(item)
             self.duplicate_groups = []
-              # Run comparison in background thread
+            # Run comparison in background thread
             thread = threading.Thread(target=self._compare_database_background)
             thread.start()
             
