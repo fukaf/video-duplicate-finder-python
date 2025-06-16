@@ -11,8 +11,8 @@ class VideoQualityAnalyzer:
         self.quality_weights = {
             'resolution': 0.4,      # Higher resolution is better
             'bitrate': 0.3,         # Higher bitrate usually means better quality
-            'file_size': 0.2,       # Larger file often means better quality
-            'duration': 0.1         # Longer duration might be more complete
+            'file_size': 0.3,       # Larger file often means better quality
+            'duration': 0.3         # Longer duration might be more complete
         }
     
     def compare_video_quality(self, file1_path: str, file2_path: str, 
