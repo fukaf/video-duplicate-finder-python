@@ -284,30 +284,98 @@ class VideoDatabase:
             print(f"Error clearing database: {e}")
     
     def _remove_file(self, file_path: str):
-        """Remove file from database"""
+        """Remove file from database and its associated thumbnail"""
         try:
+            # First, get the thumbnail path if it exists
+            thumbnail_path = None
+            with sqlite3.connect(self.db_path) as conn:
+                cursor = conn.cursor()
+                cursor.execute('SELECT thumbnail_path FROM files WHERE file_path = ?', (file_path,))
+                result = cursor.fetchone()
+                if result and result[0]:
+                    thumbnail_path = result[0]
+            
+            # Remove database entries
             with sqlite3.connect(self.db_path) as conn:
                 cursor = conn.cursor()
                 cursor.execute('DELETE FROM files WHERE file_path = ?', (file_path,))
                 cursor.execute('DELETE FROM duplicate_groups WHERE file1_path = ? OR file2_path = ?', 
                              (file_path, file_path))
                 conn.commit()
+            
+            # Delete thumbnail file if it exists
+            if thumbnail_path and os.path.exists(thumbnail_path):
+                try:
+                    os.remove(thumbnail_path)
+                    print(f"Deleted thumbnail: {thumbnail_path}")
+                except Exception as e:
+                    print(f"Error deleting thumbnail {thumbnail_path}: {e}")                    
         except Exception as e:
             print(f"Error removing file {file_path}: {e}")
     
     def cleanup_missing_files(self):
-        """Remove entries for files that no longer exist"""
+        """Remove entries for files that no longer exist and clean up orphaned thumbnails"""
         try:
             files = self.get_all_files()
             removed_count = 0
+            
+            # Collect valid thumbnails before removing files
+            valid_thumbnails = []
             
             for file_info in files:
                 file_path = file_info['file_path']
                 if not os.path.exists(file_path):
                     self._remove_file(file_path)
                     removed_count += 1
+                else:
+                    # File exists, keep its thumbnail in our valid list
+                    thumbnail_path = file_info.get('thumbnail_path')
+                    if thumbnail_path:
+                        valid_thumbnails.append(thumbnail_path)
+            
+            # Clean up orphaned thumbnails
+            orphaned_count = self._cleanup_orphaned_thumbnails(valid_thumbnails)
             
             print(f"Cleaned up {removed_count} missing files from database")
+            print(f"Cleaned up {orphaned_count} orphaned thumbnails")
             
         except Exception as e:
             print(f"Error during cleanup: {e}")
+    
+    def _cleanup_orphaned_thumbnails(self, valid_thumbnails):
+        """Remove thumbnail files that aren't in the valid list"""
+        orphaned_count = 0
+        
+        # Determine thumbnail directory
+        thumbnail_dir = None
+        if valid_thumbnails:
+            # Use directory from first valid thumbnail
+            thumbnail_dir = os.path.dirname(valid_thumbnails[0])
+        else:
+            # Default location relative to this script
+            src_path = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+            thumbnail_dir = os.path.join(src_path, "thumbnails")
+        
+        if not os.path.exists(thumbnail_dir):
+            return orphaned_count
+        
+        try:
+            # Extract just the filenames from valid_thumbnails
+            valid_thumbnail_files = set(os.path.basename(path) for path in valid_thumbnails if path)
+            
+            # Clean up any files in the thumbnail directory that aren't in our valid list
+            for filename in os.listdir(thumbnail_dir):
+                if filename.endswith(".jpg"):
+                    file_path = os.path.join(thumbnail_dir, filename)
+                    if filename not in valid_thumbnail_files and os.path.isfile(file_path):
+                        try:
+                            os.remove(file_path)
+                            orphaned_count += 1
+                            print(f"Deleted orphaned thumbnail: {filename}")
+                        except Exception as e:
+                            print(f"Error deleting orphaned thumbnail {file_path}: {e}")
+            
+        except Exception as e:
+            print(f"Error during thumbnail cleanup: {e}")
+        
+        return orphaned_count

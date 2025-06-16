@@ -753,7 +753,6 @@ class MainWindow:
                     os.system(f'open "{file_path}"')  # macOS
                 except:
                     os.system(f'xdg-open "{file_path}"')  # Linux
-    
     def delete_selected_file(self):
         """Delete selected file after confirmation"""
         selection = self.results_tree.selection()
@@ -766,26 +765,44 @@ class MainWindow:
         if tags:
             file_path = tags[0]
             result = messagebox.askyesno("Confirm Delete", 
-                                       f"Are you sure you want to delete:\n{file_path}")
+                                       f"Are you sure you want to delete:\n{file_path}\n\n"
+                                       f"This will also remove the file from the database and delete its thumbnail.")
             if result:
                 try:
+                    # Remove from database first to get thumbnail info
+                    src_path = Path(__file__).parent.parent
+                    sys.path.insert(0, str(src_path))
+                    from core.database import VideoDatabase
+                    
+                    db = VideoDatabase()
+                    
+                    # Get thumbnail path before removing from database
+                    thumbnail_path = db.get_file_thumbnail(file_path)
+                    
+                    # Delete the actual file
                     os.remove(file_path)
+                    
+                    # Remove from database (this will also try to delete thumbnail)
+                    db._remove_file(file_path)
+                    
+                    # Remove from tree view
                     self.results_tree.delete(item)
                     
-                    # Remove from database as well
-                    try:
-                        src_path = Path(__file__).parent.parent
-                        sys.path.insert(0, str(src_path))
-                        from core.database import VideoDatabase
-                        
-                        db = VideoDatabase()
-                        db._remove_file(file_path)
-                    except Exception as db_e:
-                        print(f"Warning: Failed to remove file from database: {db_e}")
+                    # Show success message
+                    msg = "File deleted successfully"
+                    if thumbnail_path:
+                        msg += f"\nThumbnail also removed: {Path(thumbnail_path).name}"
                     
-                    messagebox.showinfo("Deleted", "File deleted successfully")
+                    self.logger.info(f"Deleted file: {file_path}")
+                    if thumbnail_path:
+                        self.logger.info(f"Deleted thumbnail: {thumbnail_path}")
+                    
+                    messagebox.showinfo("Deleted", msg)
+                    
                 except Exception as e:
-                    messagebox.showerror("Error", f"Failed to delete file: {e}")
+                    error_msg = f"Failed to delete file: {e}"
+                    self.logger.error(error_msg)
+                    messagebox.showerror("Error", error_msg)
     
     def show_in_explorer(self):
         """Show selected file in Windows Explorer"""
@@ -1050,12 +1067,11 @@ class MainWindow:
             else:
                 self.logger.warning("No statistics available from database")
                 messagebox.showwarning("Database Stats", "Could not retrieve database statistics")
-                
         except Exception as e:
             messagebox.showerror("Error", f"Failed to get database stats: {e}")
 
     def clean_database(self):
-        """Clean database by removing entries for non-existent files"""
+        """Clean database by removing entries for non-existent files and orphaned thumbnails"""
         try:
             src_path = Path(__file__).parent.parent
             sys.path.insert(0, str(src_path))
@@ -1070,36 +1086,91 @@ class MainWindow:
             missing_files = [f for f in before_files if not os.path.exists(f['file_path'])]
             missing_count = len(missing_files)
             
+            # Count thumbnails
+            thumbnail_dir = src_path / "thumbnails"
+            thumbnail_count = 0
+            if thumbnail_dir.exists():
+                thumbnail_files = [f for f in thumbnail_dir.glob("*.jpg")]
+                thumbnail_count = len(thumbnail_files)
+            
             if missing_count == 0:
-                messagebox.showinfo("Clean Database", "Database is already clean! No missing files found.")
+                # Check for orphaned thumbnails even if no missing files
+                result = messagebox.askyesno("Clean Database", 
+                                           f"No missing files found.\n\n"
+                                           f"Would you like to clean up orphaned thumbnails?\n"
+                                           f"Found {thumbnail_count} thumbnail files.")
+                if not result:
+                    return
+                    
+                # Clean orphaned thumbnails only
+                self.status_label.config(text="Cleaning orphaned thumbnails...")
+                self.root.update()
+                
+                # Get valid thumbnails from database
+                valid_thumbnails = [f.get('thumbnail_path') for f in before_files 
+                                  if f.get('thumbnail_path') and os.path.exists(f.get('thumbnail_path'))]
+                
+                orphaned_count = db._cleanup_orphaned_thumbnails(valid_thumbnails)
+                
+                self.status_label.config(text="Thumbnail cleanup complete")
+                messagebox.showinfo("Thumbnail Cleanup Complete", 
+                                  f"Removed {orphaned_count} orphaned thumbnails.")
                 return
             
             # Confirm cleanup
             result = messagebox.askyesno("Confirm Database Cleanup", 
-                                       f"Found {missing_count} missing files out of {before_count} total files.\n\n"
-                                       f"This will remove database entries for files that no longer exist on disk.\n\n"
+                                       f"Found {missing_count} missing files out of {before_count} total files.\n"
+                                       f"Found {thumbnail_count} thumbnail files.\n\n"
+                                       f"This will remove database entries for files that no longer exist\n"
+                                       f"and clean up orphaned thumbnails.\n\n"
                                        f"Continue with cleanup?")
             
             if result:
-                self.status_label.config(text="Cleaning database...")
+                self.status_label.config(text="Cleaning database and thumbnails...")
                 self.root.update()
+                
+                # Capture cleanup output
+                import io
+                old_stdout = sys.stdout
+                captured_output = io.StringIO()
+                sys.stdout = captured_output
                 
                 # Perform cleanup
                 db.cleanup_missing_files()
+                
+                # Restore stdout and get captured output
+                sys.stdout = old_stdout
+                cleanup_messages = captured_output.getvalue()
+                
+                # Log cleanup messages
+                for line in cleanup_messages.split('\n'):
+                    if line.strip():
+                        self.logger.info(line)
                 
                 # Get stats after cleanup
                 after_files = db.get_all_files()
                 after_count = len(after_files)
                 cleaned_count = before_count - after_count
                 
+                # Count thumbnails after cleanup
+                thumbnail_count_after = 0
+                if thumbnail_dir.exists():
+                    thumbnail_files = [f for f in thumbnail_dir.glob("*.jpg")]
+                    thumbnail_count_after = len(thumbnail_files)
+                
+                thumbnails_removed = thumbnail_count - thumbnail_count_after
+                
                 self.status_label.config(text="Database cleanup complete")
                 
                 messagebox.showinfo("Database Cleanup Complete", 
                                   f"Database cleanup completed successfully!\n\n"
                                   f"Removed {cleaned_count} entries for missing files\n"
-                                  f"Database now contains {after_count} files")
+                                  f"Removed {thumbnails_removed} orphaned thumbnails\n"
+                                  f"Database now contains {after_count} files\n"
+                                  f"See log tab for details")
                 
         except Exception as e:
             error_msg = f"Failed to clean database: {e}"
+            self.logger.error(error_msg)
             self.status_label.config(text="Database cleanup failed")
             messagebox.showerror("Error", error_msg)
