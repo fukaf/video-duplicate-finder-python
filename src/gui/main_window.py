@@ -1005,8 +1005,7 @@ class MainWindow:
             for item in self.results_tree.get_children():
                 self.results_tree.delete(item)
             self.duplicate_groups = []
-            
-            # Run comparison in background thread
+              # Run comparison in background thread
             thread = threading.Thread(target=self._compare_database_background)
             thread.start()
             
@@ -1020,7 +1019,14 @@ class MainWindow:
             sys.path.insert(0, str(src_path))
             from core.scanner import VideoScanner
             
-            scanner = VideoScanner(num_workers=int(self.cpu_cores_var.get()), logger=self.logger)
+            # Initialize scanner with similarity threshold and other settings
+            scanner = VideoScanner(
+                similarity_threshold=self.threshold_var.get(),
+                num_workers=int(self.cpu_cores_var.get()), 
+                logger=self.logger
+            )
+            
+            self.logger.info(f"Comparing database with similarity threshold: {self.threshold_var.get()}")
             duplicates = scanner.compare_existing_database()
             
             if duplicates:
