@@ -9,7 +9,7 @@ import struct
 class PerceptualHasher:
     """Advanced perceptual hashing for video duplicate detection"""
     
-    def __init__(self, hash_size: int = 8, sample_frames: int = 7):
+    def __init__(self, hash_size: int = 8, sample_frames: int = 2):
         self.hash_size = hash_size
         self.sample_frames = sample_frames
         
@@ -75,8 +75,8 @@ class PerceptualHasher:
         positions = []
         
         # Always sample first and last frame
-        positions.append(0)
-        positions.append(frame_count - 1)
+        # positions.append(0)
+        # positions.append(frame_count - 1)
         
         # Sample at key percentages for better duplicate detection
         # These positions are less likely to be affected by minor edits
@@ -336,26 +336,18 @@ class PerceptualHasher:
             whash_sim = self._compare_hash_strings(whash1, whash2)
             color_sim = self._compare_hash_strings(color1, color2)
             edge_sim = self._compare_hash_strings(edge1, edge2)
-              # Weighted combination (emphasize most effective hash types for video similarity)
-            similarity = (
-                phash_sim * 0.30 +      # Perceptual hash (most robust to scaling/compression)
-                dhash_sim * 0.25 +      # Difference hash (good for similar content)
-                whash_sim * 0.20 +      # Wavelet hash (frequency domain, good for compression)
-                ahash_sim * 0.10 +      # Average hash (simple but effective baseline)
-                color_sim * 0.08 +      # Color distribution (important for videos)
-                edge_sim * 0.04 +       # Edge patterns (structural similarity)
-                temporal_similarity * 0.02 +  # Temporal features (brightness, contrast)
-                duration_similarity * 0.01    # Duration match (videos should be similar length)
-            )
             
-            # Apply non-linear scaling to enhance high similarity scores
-            # This makes truly similar videos cluster more tightly together
-            if similarity > 0.7:
-                # Boost high similarity scores
-                similarity = 0.7 + (similarity - 0.7) * 1.5
-            elif similarity > 0.5:
-                # Moderate boost for medium similarity
-                similarity = 0.5 + (similarity - 0.5) * 1.2
+            # Weighted combination (emphasize perceptual hashes)
+            similarity = (
+                dhash_sim * 0.25 +      # Difference hash (good for similar content)
+                phash_sim * 0.25 +      # Perceptual hash (robust to scaling)
+                ahash_sim * 0.15 +      # Average hash (simple but effective)
+                whash_sim * 0.15 +      # Wavelet hash (frequency domain)
+                color_sim * 0.10 +      # Color distribution
+                edge_sim * 0.05 +       # Edge patterns
+                temporal_similarity * 0.03 +  # Temporal features
+                duration_similarity * 0.02    # Duration match
+            )
             
             return max(0.0, min(1.0, similarity))
             
@@ -371,14 +363,15 @@ class PerceptualHasher:
             
             if len(parts1) < 3 or len(parts2) < 3:
                 return 0.0
-              # Simple string comparison for legacy format
+            
+            # Simple string comparison for legacy format
             return self._compare_hash_strings(parts1[2], parts2[2])
             
         except Exception:
             return 0.0
     
     def _compare_hash_strings(self, hash_str1: str, hash_str2: str) -> float:
-        """Compare hash strings using enhanced Hamming distance with threshold"""
+        """Compare hash strings using Hamming distance"""
         if not hash_str1 or not hash_str2:
             return 0.0
             
@@ -390,32 +383,10 @@ class PerceptualHasher:
         hash_str1 = hash_str1[:min_len]
         hash_str2 = hash_str2[:min_len]
         
-        # Enhanced Hamming distance with position weighting
-        # Give more weight to differences in the beginning of the hash
-        weighted_differences = 0.0
-        total_weight = 0.0
+        # Hamming distance
+        differences = sum(c1 != c2 for c1, c2 in zip(hash_str1, hash_str2))
+        similarity = 1.0 - (differences / min_len)
         
-        for i, (c1, c2) in enumerate(zip(hash_str1, hash_str2)):
-            # Position weight: earlier positions get slightly more weight
-            weight = 1.0 + (0.3 * (1 - i / min_len))
-            total_weight += weight
-            
-            if c1 != c2:
-                # For hex characters, calculate distance based on numeric difference
-                try:
-                    if c1 in '0123456789ABCDEF' and c2 in '0123456789ABCDEF':
-                        val1 = int(c1, 16)
-                        val2 = int(c2, 16)
-                        # Normalize difference (0-15 range becomes 0-1)
-                        char_diff = abs(val1 - val2) / 15.0
-                    else:
-                        char_diff = 1.0  # Complete mismatch for non-hex chars
-                except:
-                    char_diff = 1.0
-                
-                weighted_differences += char_diff * weight
-            
-        similarity = 1.0 - (weighted_differences / total_weight)
         return max(0.0, similarity)
     
     def _compare_hex_strings(self, hex1: str, hex2: str) -> float:
