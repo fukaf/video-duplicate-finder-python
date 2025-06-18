@@ -559,8 +559,7 @@ class MainWindow:
             if gid not in groups:
                 groups[gid] = []
             groups[gid].append(file_path)
-        
-        # Only return groups with 2 or more files
+          # Only return groups with 2 or more files
         result_groups = [group for group in groups.values() if len(group) >= 2]
         self.logger.debug(f"Created {len(result_groups)} groups from clustering")
         return result_groups
@@ -589,9 +588,25 @@ class MainWindow:
             total_size_mb = sum(f['metadata'].get('file_size_mb', 0) for f in group_analysis['files'])
             space_saved_mb = group_analysis['recommendation']['space_saved_mb']
             
+            # Check if all videos in the group have the same duration
+            duration_differences = group_analysis['duration_differences']
+
+            # Consider durations "same" if they're within 2 seconds of each other
+            if duration_differences < 2.0:
+                same_duration = True
+            else:
+                same_duration = False
+            
+            # Determine group tag based on duration matching
+            group_tag = "same_duration" if same_duration else "different_duration"
+            
+            # Create group status text
+            duration_status = "✓ Same Duration" if same_duration else "⚠ Different Durations"
+            
             group_id = self.results_tree.insert("", "end", 
-                                               text=f"Group {i+1} ({len(group)} files) - Save {space_saved_mb:.1f}MB", 
-                                               values=("", "", "", "", f"Keep best, delete {len(group)-1}"))
+                                               text=f"Group {i+1} ({len(group)} files) - Save {space_saved_mb:.1f}MB - {duration_status}", 
+                                               values=("", "", "", "", f"Keep best, delete {len(group)-1}"),
+                                               tags=(group_tag,))
             
             # Add files sorted by quality
             for j, file_info in enumerate(group_analysis['files']):
@@ -616,10 +631,17 @@ class MainWindow:
                                                  text=Path(file_path).name,
                                                  values=(quality_score, resolution, size_str, duration, recommendation),
                                                  tags=(file_path, tag_color))
+            
+            # Auto-expand groups with different durations
+            if not same_duration:
+                self.results_tree.item(group_id, open=True)
+                self.logger.info(f"Auto-expanded Group {i+1} due to different video durations")
         
         # Configure tag colors
         self.results_tree.tag_configure("keep", foreground="green")
         self.results_tree.tag_configure("delete", foreground="red")
+        self.results_tree.tag_configure("same_duration", background="#e8f5e8", foreground="darkgreen")  # Light green background
+        self.results_tree.tag_configure("different_duration", background="#fff3cd", foreground="darkorange")  # Light yellow background
     
     def _format_file_size(self, size_bytes):
         """Format file size in human readable format"""

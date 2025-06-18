@@ -248,9 +248,21 @@ class VideoQualityAnalyzer:
                 'best_file': best_file,
                 'space_saved_mb': sum(f['metadata'].get('file_size_mb', 0) for f in files_to_delete),
                 'quality_differences': self._get_group_quality_differences(file_data)
-            }
+            },
+            'duration_differences': self._get_group_duration_differences(file_data)
         }
-    
+        
+    def _get_group_duration_differences(self, file_data: List[Dict]) -> List[str]:
+        """Get duration differences among a group of files"""
+        if len(file_data) < 2:
+            return 0
+
+        durations = [f['metadata'].get('duration', 0) for f in file_data]
+        min_duration = min(durations)
+        max_duration = max(durations)
+
+        return max_duration - min_duration
+
     def _get_group_quality_differences(self, file_data: List[Dict]) -> List[str]:
         """Get quality differences for a group of files"""
         if len(file_data) < 2:
