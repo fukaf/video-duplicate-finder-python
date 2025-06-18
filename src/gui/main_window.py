@@ -36,8 +36,7 @@ class TextHandler(logging.Handler):
             self.text_widget.configure(state='disabled')
             # Auto-scroll to bottom
             self.text_widget.see(tk.END)
-        except tk.TclError:
-            # Widget might be destroyed
+        except tk.TclError:            # Widget might be destroyed
             pass
         
 class MainWindow:
@@ -50,6 +49,8 @@ class MainWindow:
         self.setup_ui()
         self.scanner = None
         self.duplicate_groups = []
+        # Track checkbox states for duplicate groups
+        self.group_checkbox_states = {}  # group_id -> boolean
     def setup_logging(self):
         """Setup logging configuration"""
         # Create logger
@@ -150,8 +151,7 @@ class MainWindow:
         self.cores_label.grid(row=0, column=1, padx=(5,0))
         self.cores_scale.configure(command=self.update_cores_label)
         
-        cores_frame.columnconfigure(0, weight=1)
-          # Control buttons
+        cores_frame.columnconfigure(0, weight=1)        # Control buttons
         control_frame = ttk.Frame(left_panel)
         control_frame.grid(row=2, column=0, columnspan=2, pady=10)
         
@@ -165,7 +165,8 @@ class MainWindow:
         
         ttk.Button(control_frame, text="Generate Thumbnails", 
                   command=self.generate_thumbnails).grid(row=0, column=3, padx=5)
-          # Second row of buttons for database operations
+        
+        # Second row of buttons for database operations
         ttk.Button(control_frame, text="Compare Database", 
                   command=self.compare_database).grid(row=1, column=0, padx=5, pady=5)
         
@@ -174,6 +175,13 @@ class MainWindow:
                   
         ttk.Button(control_frame, text="Clean Database", 
                   command=self.clean_database).grid(row=1, column=2, padx=5, pady=5)
+        
+        # Third row of buttons for checkbox operations
+        ttk.Button(control_frame, text="Select All Groups", 
+                  command=self.select_all_groups).grid(row=2, column=0, padx=5, pady=5)
+        
+        ttk.Button(control_frame, text="Deselect All Groups", 
+                  command=self.deselect_all_groups).grid(row=2, column=1, padx=5, pady=5)
         
         # Status and progress
         status_frame = ttk.Frame(left_panel)
@@ -185,8 +193,7 @@ class MainWindow:
         self.progress_var = tk.DoubleVar()
         self.progress_bar = ttk.Progressbar(status_frame, variable=self.progress_var, maximum=100)
         self.progress_bar.grid(row=1, column=0, sticky=(tk.W, tk.E), pady=5)
-        
-        # Results tree
+          # Results tree
         results_frame = ttk.LabelFrame(left_panel, text="Duplicate Groups", padding="5")
         results_frame.grid(row=4, column=0, columnspan=2, sticky=(tk.W, tk.E, tk.N, tk.S), pady=5)
         
@@ -199,15 +206,17 @@ class MainWindow:
         self.root.columnconfigure(0, weight=1)
         self.root.rowconfigure(0, weight=1)
         
-        self.results_tree = ttk.Treeview(results_frame, columns=("quality", "resolution", "size", "duration", "recommendation"), 
+        self.results_tree = ttk.Treeview(results_frame, columns=("select", "quality", "resolution", "size", "duration", "recommendation"), 
                                         show="tree headings")
         self.results_tree.heading("#0", text="Files")
+        self.results_tree.heading("select", text="Auto-Delete")
         self.results_tree.heading("quality", text="Quality")
         self.results_tree.heading("resolution", text="Resolution")
         self.results_tree.heading("size", text="Size")
         self.results_tree.heading("duration", text="Duration")
         self.results_tree.heading("recommendation", text="Recommendation")
         
+        self.results_tree.column("select", width=80)
         self.results_tree.column("quality", width=60)
         self.results_tree.column("resolution", width=80)
         self.results_tree.column("size", width=80)
@@ -216,7 +225,9 @@ class MainWindow:
         
         self.results_tree.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
         self.results_tree.bind("<<TreeviewSelect>>", self.on_file_select)
-          # Scrollbar for results
+        self.results_tree.bind("<Button-1>", self.on_tree_click)  # Handle checkbox clicks
+        
+        # Scrollbar for results
         scrollbar = ttk.Scrollbar(results_frame, orient=tk.VERTICAL, command=self.results_tree.yview)
         scrollbar.grid(row=0, column=1, sticky=(tk.N, tk.S))
         self.results_tree.configure(yscrollcommand=scrollbar.set)
@@ -444,7 +455,6 @@ class MainWindow:
                 self.log_text.configure(state='disabled')
         except Exception as e:
             print(f"Error adding info message: {e}")
-    
     def browse_directory(self):
         directory = filedialog.askdirectory()
         if directory:
@@ -476,6 +486,7 @@ class MainWindow:
         for item in self.results_tree.get_children():
             self.results_tree.delete(item)
         self.duplicate_groups = []
+        self.group_checkbox_states = {}  # Clear checkbox states
         
         # Start scanning in separate thread
         self.scan_thread = threading.Thread(target=self._scan_directory, args=(directory,))
@@ -596,17 +607,22 @@ class MainWindow:
                 same_duration = True
             else:
                 same_duration = False
-            
-            # Determine group tag based on duration matching
+              # Determine group tag based on duration matching
             group_tag = "same_duration" if same_duration else "different_duration"
             
             # Create group status text
             duration_status = "✓ Same Duration" if same_duration else "⚠ Different Durations"
             
+            # Set default checkbox state (checked by default)
+            checkbox_state = "☑"  # Checked checkbox
+            
             group_id = self.results_tree.insert("", "end", 
                                                text=f"Group {i+1} ({len(group)} files) - Save {space_saved_mb:.1f}MB - {duration_status}", 
-                                               values=("", "", "", "", f"Keep best, delete {len(group)-1}"),
+                                               values=(checkbox_state, "", "", "", "", f"Keep best, delete {len(group)-1}"),
                                                tags=(group_tag,))
+            
+            # Store checkbox state for this group
+            self.group_checkbox_states[group_id] = True
             
             # Add files sorted by quality
             for j, file_info in enumerate(group_analysis['files']):
@@ -618,8 +634,7 @@ class MainWindow:
                 resolution = metadata.get('resolution', 'Unknown')
                 size_str = f"{metadata.get('file_size_mb', 0):.1f}MB"
                 duration = metadata.get('duration_formatted', 'Unknown')
-                
-                # Determine recommendation
+                  # Determine recommendation
                 if j == 0:
                     recommendation = "KEEP (Best Quality)"
                     tag_color = "keep"
@@ -629,7 +644,7 @@ class MainWindow:
                 
                 item_id = self.results_tree.insert(group_id, "end", 
                                                  text=Path(file_path).name,
-                                                 values=(quality_score, resolution, size_str, duration, recommendation),
+                                                 values=("", quality_score, resolution, size_str, duration, recommendation),
                                                  tags=(file_path, tag_color))
             
             # Auto-expand groups with different durations
@@ -1039,7 +1054,7 @@ class MainWindow:
             if not files_to_delete:
                 messagebox.showinfo("No Action", "No files recommended for deletion")
                 return
-              # Confirm deletion
+            # Confirm deletion
             file_list = "\n".join([f"• {Path(f).name}" for f in files_to_delete])
             result = messagebox.askyesno("Confirm Auto-Delete", 
                                        f"Delete {len(files_to_delete)} lower quality files?\n\n"
@@ -1087,21 +1102,42 @@ class MainWindow:
                     group_text = self.results_tree.item(group_item, "text")
                     updated_text = group_text.split(" - Save")[0]  # Remove old savings info
                     self.results_tree.item(group_item, text=f"{updated_text} - {remaining_children} files remaining")
-                
         except Exception as e:
             messagebox.showerror("Error", f"Failed to auto-delete files: {e}")
 
     def delete_all_low_quality(self):
-        """Delete all low quality files in all duplicate groups at once"""
+        """Delete all low quality files in selected duplicate groups"""
         if not self.duplicate_groups:
             messagebox.showwarning("No Duplicates", "No duplicate groups found. Please scan for duplicates first.")
             return
         
+        # Get selected groups
+        selected_groups = self.get_selected_groups()
+        if not selected_groups:
+            messagebox.showwarning("No Groups Selected", "No duplicate groups are selected for auto-delete.\n\nPlease check the boxes next to the groups you want to process.")
+            return
+        
+        # Get actual file paths for selected groups
+        selected_file_groups = []
+        for group_item in selected_groups:
+            # Get all file paths from this group
+            file_paths = []
+            for child in self.results_tree.get_children(group_item):
+                tags = self.results_tree.item(child, "tags")
+                if tags and len(tags) > 0 and tags[0] not in ['keep', 'delete', 'same_duration', 'different_duration']:
+                    file_paths.append(tags[0])
+            if file_paths:
+                selected_file_groups.append(file_paths)
+        
+        if not selected_file_groups:
+            messagebox.showwarning("No Valid Groups", "No valid file groups found in selected items.")
+            return
+        
         # Confirm the operation
-        total_groups = len(self.duplicate_groups)
+        total_selected = len(selected_file_groups)
         result = messagebox.askyesno("Confirm Batch Delete", 
-                                   f"Delete all low quality files in {total_groups} duplicate groups?\n\n"
-                                   f"This will analyze each group and delete lower quality duplicates.\n"
+                                   f"Delete low quality files in {total_selected} selected duplicate groups?\n\n"
+                                   f"This will analyze each selected group and delete lower quality duplicates.\n"
                                    f"Groups where low quality videos are much longer will be skipped.")
         
         if not result:
@@ -1121,16 +1157,16 @@ class MainWindow:
             total_space_saved = 0.0
             skipped_groups = []
             processed_groups = 0
+              # Progress tracking
+            total_selected = len(selected_file_groups)
+            self.logger.info(f"Starting batch deletion of low quality files in {total_selected} selected groups...")
             
-            # Progress tracking
-            self.logger.info(f"Starting batch deletion of low quality files in {total_groups} groups...")
-            
-            for group_index, file_paths in enumerate(self.duplicate_groups):
+            for group_index, file_paths in enumerate(selected_file_groups):
                 try:
                     if len(file_paths) < 2:
                         continue
                     
-                    self.logger.info(f"Processing group {group_index + 1}/{total_groups}: {len(file_paths)} files")
+                    self.logger.info(f"Processing group {group_index + 1}/{total_selected}: {len(file_paths)} files")
                     
                     # Analyze group quality
                     group_analysis = quality_analyzer.analyze_duplicate_group(file_paths)
@@ -1385,7 +1421,7 @@ class MainWindow:
                                            f"Found {thumbnail_count} thumbnail files.")
                 if not result:
                     return
-                    
+                
                 # Clean orphaned thumbnails only
                 self.status_label.config(text="Cleaning orphaned thumbnails...")
                 self.root.update()
@@ -1450,11 +1486,72 @@ class MainWindow:
                                   f"Database cleanup completed successfully!\n\n"
                                   f"Removed {cleaned_count} entries for missing files\n"
                                   f"Removed {thumbnails_removed} orphaned thumbnails\n"
-                                  f"Database now contains {after_count} files\n"
-                                  f"See log tab for details")
-                
+                                  f"Database now contains {after_count} files\n"                                  f"See log tab for details")                
         except Exception as e:
             error_msg = f"Failed to clean database: {e}"
             self.logger.error(error_msg)
             self.status_label.config(text="Database cleanup failed")
             messagebox.showerror("Error", error_msg)
+    
+    def on_tree_click(self, event):
+        """Handle clicks on the TreeView to toggle checkboxes"""
+        # Get the item that was clicked using the correct identify method
+        region = self.results_tree.identify("region", event.x, event.y)
+        if region != "cell":
+            return
+            
+        item = self.results_tree.identify("item", event.x, event.y)
+        if not item:
+            return
+        
+        # Only handle clicks on group items (not individual files)
+        parent = self.results_tree.parent(item)
+        if parent:  # This is a file item, not a group
+            return
+        
+        # Check if click is in the select column (checkbox column)
+        column = self.results_tree.identify("column", event.x, event.y)
+        if column == "#1":  # #1 is the select column
+            self.toggle_group_checkbox(item)
+    
+    def toggle_group_checkbox(self, group_item):
+        """Toggle the checkbox state for a duplicate group"""
+        current_state = self.group_checkbox_states.get(group_item, True)
+        new_state = not current_state
+        self.group_checkbox_states[group_item] = new_state
+        
+        # Update the visual representation
+        checkbox_symbol = "☑" if new_state else "☐"
+        current_values = list(self.results_tree.item(group_item, "values"))
+        current_values[0] = checkbox_symbol
+        self.results_tree.item(group_item, values=current_values)
+        
+        self.logger.debug(f"Toggled group checkbox: {'checked' if new_state else 'unchecked'}")
+    
+    def select_all_groups(self):
+        """Select all duplicate groups for auto-delete"""
+        for item in self.results_tree.get_children():
+            self.group_checkbox_states[item] = True
+            current_values = list(self.results_tree.item(item, "values"))
+            current_values[0] = "☑"
+            self.results_tree.item(item, values=current_values)
+        
+        self.logger.info("Selected all duplicate groups for auto-delete")
+        
+    def deselect_all_groups(self):
+        """Deselect all duplicate groups from auto-delete"""
+        for item in self.results_tree.get_children():
+            self.group_checkbox_states[item] = False
+            current_values = list(self.results_tree.item(item, "values"))
+            current_values[0] = "☐"
+            self.results_tree.item(item, values=current_values)
+        
+        self.logger.info("Deselected all duplicate groups from auto-delete")
+    
+    def get_selected_groups(self):
+        """Get list of group items that are selected for auto-delete"""
+        selected_groups = []
+        for item in self.results_tree.get_children():
+            if self.group_checkbox_states.get(item, False):
+                selected_groups.append(item)
+        return selected_groups
