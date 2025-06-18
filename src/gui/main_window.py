@@ -51,6 +51,10 @@ class MainWindow:
         self.duplicate_groups = []
         # Track checkbox states for duplicate groups
         self.group_checkbox_states = {}  # group_id -> boolean
+        
+        # Track active threads
+        self.scan_thread = None
+        self.is_closing = False
     def setup_logging(self):
         """Setup logging configuration"""
         # Create logger
@@ -66,6 +70,29 @@ class MainWindow:
           # We'll add the text handler after creating the text widget
         self.log_formatter = formatter
         
+    def on_closing(self):
+        """Handle window close event properly"""
+        self.is_closing = True
+        
+        # Stop any running scan
+        if hasattr(self, 'scanner') and self.scanner:
+            self.logger.info("Stopping scanner before exit...")
+            self.scanner.stop()
+        
+        # Wait for scan thread to finish (with timeout)
+        if self.scan_thread and self.scan_thread.is_alive():
+            self.logger.info("Waiting for scan thread to finish...")
+            self.scan_thread.join(timeout=3.0)  # Wait max 3 seconds
+            
+            if self.scan_thread.is_alive():
+                self.logger.warning("Scan thread did not finish cleanly")
+        
+        # Cleanup logging handlers
+        if hasattr(self, 'text_handler'):
+            self.logger.removeHandler(self.text_handler)
+        
+        self.logger.info("Application closing...")
+        self.root.destroy()
     def run(self):
         """Start the application"""
         self.root.mainloop()
@@ -488,13 +515,20 @@ class MainWindow:
         self.duplicate_groups = []
         self.group_checkbox_states = {}  # Clear checkbox states
         
+        # Clean up previous scanner instance
+        self.scanner = None
+        
         # Start scanning in separate thread
-        self.scan_thread = threading.Thread(target=self._scan_directory, args=(directory,))
+        self.scan_thread = threading.Thread(target=self._scan_directory, args=(directory,), daemon=True)
         self.scan_thread.start()
     
     def _scan_directory(self, directory):
         """Run scan in background thread"""
         try:
+            # Check if we're closing
+            if self.is_closing:
+                return
+            
             self.logger.debug("Initializing scanner...")
             # Add src path for imports
             src_path = Path(__file__).parent.parent
@@ -782,13 +816,13 @@ class MainWindow:
     
     def stop_scan(self):
         """Stop current scan"""
-        print("Stop button pressed")
+        self.logger.info("Stop button pressed")
         if hasattr(self, 'scanner') and self.scanner:
-            print("Stopping scanner...")
+            self.logger.info("Stopping scanner...")
             self.scanner.stop()
             self.status_label.config(text="Stopping scan...")
         else:
-            print("No active scanner found")
+            self.logger.info("No active scanner found")
         
         # Reset UI immediately
         self.scan_complete()
@@ -821,6 +855,7 @@ class MainWindow:
         
         if not all_files:
             return
+        
           # Start thumbnail generation in background
         self.status_label.config(text="Generating thumbnails...")
         self.progress_var.set(0)
